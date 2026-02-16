@@ -1,0 +1,6 @@
+numpy==2.4.2
+pydicom==3.0.1
+PyQt6==6.10.2
+pyqt6_sip==13.11.0
+scipy==1.17.0
+vtk==9.6.0
