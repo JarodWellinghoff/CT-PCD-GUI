@@ -40,12 +40,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libgl1-mesa-dev \
-            libglib2.0-0 \
-            libegl1 \
-            libxkbcommon0 \
-            libdbus-1-3
+          sudo apt-get install -y libgl1-mesa-dev libglib2.0-0 libegl1 libxkbcommon0 libdbus-1-3
 
       - name: Install Python dependencies
         run: |
@@ -55,14 +50,7 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          pyinstaller ${{ matrix.pyinstaller_args }} \
-            --onefile \
-            --collect-all vtkmodules \
-            --collect-all pydicom \
-            --hidden-import scipy.io \
-            --hidden-import scipy.io.matlab \
-            --hidden-import PyQt6.sip \
-            src/app.py
+          pyinstaller ${{ matrix.pyinstaller_args }} --onefile --collect-all vtkmodules --collect-all pydicom --hidden-import scipy.io --hidden-import scipy.io.matlab --hidden-import PyQt6.sip src/app.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
