@@ -1,6 +1,6 @@
-from dicom_details import DicomDetailsDock
-from lesion_library import LesionLibraryDock
-from roi_tools import ROIToolsDock
+from src.docks.dicom_details import DicomDetailsDock
+from src.docks.lesion_library import LesionLibraryDock
+from src.docks.roi_tools import ROIToolsDock
 
 """Docks package for CT-PCD-GUI."""
 
