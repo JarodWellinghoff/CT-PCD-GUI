@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68.0", "setuptools-scm>=8.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "ct-pcd-gui"
+version = "0.1.0"
+description = "DICOM viewer with ROI tools and 3D lesion model visualization"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy==2.4.2",
+    "pydicom==3.0.1",
+    "PyQt6==6.10.2",
+    "pyqt6-sip==13.11.0",
+    "scipy==1.17.0",
+    "vtk==9.6.0",
+]
+
+[project.scripts]
+ct-pcd-gui = "src.app:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
