@@ -1,10 +1,9 @@
 name: PyInstaller Action
 
 on:
-  release:
-    types: [published]
   push:
-    tags: ['v*']
+    tags:
+      - 'v*'
 
 permissions:
   contents: write
