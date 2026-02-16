@@ -1,6 +1,5 @@
 from pathlib import Path
 from typing import Optional
-
 from PyQt6.QtWidgets import (
     QFileDialog,
     QLabel,
@@ -18,7 +17,7 @@ from PyQt6.QtWidgets import (
     QCheckBox,
 )
 from PyQt6.QtCore import Qt
-from LesionViewerWidget import LesionViewerWidget
+from src.widgets import LesionViewerWidget
 
 
 # ===========================================================================

@@ -7,12 +7,9 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QAction
 from PyQt6.QtCore import QSize, Qt
-from SettingsManager import SettingsManager, SETTINGS_FILE
-from DicomViewerWidget import DicomViewerWidget
-from LesionViewerWidget import LesionViewerWidget
-from LesionLibraryDock import LesionLibraryDock
-from ROIToolsDock import ROIToolsDock
-from DicomDetailsDock import DicomDetailsDock
+from src.widgets import DicomViewerWidget, LesionViewerWidget
+from src.docks import DicomDetailsDock, LesionLibraryDock, ROIToolsDock
+from src.models import SettingsManager, SETTINGS_FILE
 
 # ===========================================================================
 # Main window

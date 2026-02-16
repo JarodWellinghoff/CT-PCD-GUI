@@ -14,9 +14,9 @@ from vtkmodules.vtkRenderingCore import (
 )
 from vtkmodules.vtkImagingCore import vtkImageReslice
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
-from ROIManager import ROIManager
-from DrawTool import DrawTool
-from DrawingInteractorStyle import DrawingInteractorStyle
+from src.models import ROIManager
+from src.models import DrawTool
+from src.interaction.drawing_interactor_style import DrawingInteractorStyle
 
 
 # ===========================================================================

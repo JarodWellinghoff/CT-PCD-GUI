@@ -6,7 +6,7 @@ from vtkmodules.vtkRenderingCore import (
 )
 from vtkmodules.vtkCommonDataModel import vtkPolyData, vtkCellArray
 from vtkmodules.vtkCommonCore import vtkPoints, vtkCommand, vtkIdList
-from DrawTool import DrawTool
+from src.models import DrawTool
 
 
 # ===========================================================================

@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QColor
 from PyQt6.QtCore import Qt
-from DrawTool import DrawTool
+from src.models import DrawTool
 
 # ===========================================================================
 # ROI Tools dock
