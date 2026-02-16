@@ -18,7 +18,6 @@ class SettingsManager:
         "last_dicom_folder": "",
         "custom_spacing": [1.0, 1.0, 1.0],
         "use_dicom_spacing": True,
-        "window_geometry": [100, 100, 1200, 800],
         "rois": [],  # list of serialised ROI dicts
     }
 

@@ -20,7 +20,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.settings = SettingsManager()
-        geo = self.settings.get("window_geometry") or [100, 100, 800, 600]
+        geo = [100, 100, 800, 600]
         self.setGeometry(*geo)
         self.title = "DICOM Viewer"
 
@@ -28,13 +28,13 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget(self)
         self.setCentralWidget(self.tabs)
 
-        # Tab 1: DICOM viewer
-        self.viewer = DicomViewerWidget(parent=self)
-        self.tabs.addTab(self.viewer, "DICOM")
-
         # Tab 2: Lesion 3-D viewer
         self.lesion_viewer = LesionViewerWidget(parent=self)
         self.tabs.addTab(self.lesion_viewer, "Lesion 3D")
+
+        # Tab 1: DICOM viewer
+        self.viewer = DicomViewerWidget(parent=self)
+        self.tabs.addTab(self.viewer, "DICOM")
 
         # ---- Docks ----
         self.roi_dock = ROIToolsDock(self)
@@ -151,7 +151,6 @@ class MainWindow(QMainWindow):
     def _save_settings(self):
         s = self.settings
         g = self.geometry()
-        s.set("window_geometry", [g.x(), g.y(), g.width(), g.height()])
         s.set("last_dicom_folder", self.viewer.dicom_folder or "")
         s.set("lesion_library_dir", self.lesion_dock._library_dir or "")
         s.set("custom_spacing", self.lesion_dock.get_custom_spacing())
