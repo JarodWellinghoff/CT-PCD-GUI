@@ -1,0 +1,77 @@
+name: Build Release
+
+on:
+  release:
+    types: [published]
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: CT-PCD-GUI-Windows.exe
+            pyinstaller_args: --name CT-PCD-GUI --windowed
+          - os: ubuntu-latest
+            artifact_name: CT-PCD-GUI-Linux
+            pyinstaller_args: --name CT-PCD-GUI
+          - os: macos-latest
+            artifact_name: CT-PCD-GUI-macOS
+            pyinstaller_args: --name CT-PCD-GUI --windowed
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      # Linux needs display libs for Qt
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1-mesa-dev \
+            libglib2.0-0 \
+            libegl1 \
+            libxkbcommon0 \
+            libdbus-1-3
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller ${{ matrix.pyinstaller_args }} \
+            --onefile \
+            --collect-all vtkmodules \
+            --collect-all pydicom \
+            --hidden-import scipy.io \
+            --hidden-import scipy.io.matlab \
+            --hidden-import PyQt6.sip \
+            src/app.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/
+
+      - name: Upload to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
