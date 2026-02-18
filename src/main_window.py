@@ -35,7 +35,7 @@ class MainWindow(QMainWindow):
 
         # Tab 2: Lesion 3-D viewer
         self.lesion_viewer = LesionViewerWidget(parent=self)
-        self.tabs.addTab(self.lesion_viewer, "Lesion 3D")
+        self.tabs.addTab(self.lesion_viewer, "Lesion Library")
 
         # Tab 1: DICOM viewer
         self.viewer = DicomViewerWidget(parent=self)
@@ -71,7 +71,7 @@ class MainWindow(QMainWindow):
             self.tabs.setCurrentWidget(self.viewer)
             self.lesion_dock.hide()
             self.roi_dock.show()
-        elif module_name == "Lesion 3D":
+        elif module_name == "Lesion Library":
             self.tabs.setCurrentWidget(self.lesion_viewer)
             self.roi_dock.hide()
             self.lesion_dock.show()
@@ -85,7 +85,7 @@ class MainWindow(QMainWindow):
 
         module_label = QLabel("Module:", self)
         module_select = QComboBox(self)
-        module_select.addItems(["DICOM Viewer", "Lesion 3D"])
+        module_select.addItems(["DICOM Viewer", "Lesion Library"])
         module_select.setCurrentText(self.current_module)
         module_select.currentTextChanged.connect(self._switch_module)
 

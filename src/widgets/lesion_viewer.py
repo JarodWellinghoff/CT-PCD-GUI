@@ -130,7 +130,7 @@ class LesionViewerWidget(QWidget):
         self.current_actor = vtkActor()
         self.current_actor.SetMapper(mapper)
         self.current_actor.GetProperty().SetColor(0.9, 0.5, 0.3)
-        self.current_actor.GetProperty().SetOpacity(0.85)
+        self.current_actor.GetProperty().SetOpacity(1)
         self.current_actor.GetProperty().SetSpecular(0.3)
         self.current_actor.GetProperty().SetSpecularPower(20)
 
