@@ -158,12 +158,10 @@ class MainWindow(QMainWindow):
         self._load_dicom(folder)
 
     def _load_dicom(self, folder):
-        idx = self.tabs.indexOf(self.viewer)
-        # Clean up old VTK context before reparenting
         self.viewer.cleanup()
         self.viewer.setParent(None)
         self.viewer = DicomViewerWidget(folder, "axial", self)
-        self.viewer.dicom_spacing_changed.connect(self.lesion_dock.set_dicom_spacing)
+        self.lesion_dock.set_dicom_spacing(self.viewer.dicom_spacing)
         self.tabs.addTab(self.viewer, "DICOM")
         self.tabs.setCurrentWidget(self.viewer)
         self.roi_dock.bind_viewer(self.viewer)

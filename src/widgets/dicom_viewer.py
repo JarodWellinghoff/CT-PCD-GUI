@@ -82,7 +82,7 @@ class DicomViewerWidget(QWidget):
 
         self.slice_text = self._make_text("", 15, 10, 20, align_bottom=True)
         self.help_text = self._make_text(
-            "Scroll: slice | Esc: cancel | Dbl-click: add vtx | Del: remove vtx",
+            "Scroll: slice\nEsc: cancel\nDbl-click: add vtx\nDel: remove vtx",
             0.02,
             0.98,
             13,

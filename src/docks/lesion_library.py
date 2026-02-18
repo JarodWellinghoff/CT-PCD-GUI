@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QDoubleSpinBox,
     QCheckBox,
+    QSpinBox,
 )
 from PyQt6.QtCore import Qt
 from src.widgets import LesionViewerWidget
@@ -95,14 +96,34 @@ class LesionLibraryDock(QDockWidget):
         lay.addStretch()
         self.setWidget(container)
 
+        # ---- Smoothing controls ----
+        smooth_grp = QGroupBox("Appearance")
+        smooth_lay = QFormLayout(smooth_grp)
+
+        self.smooth_spin = QSpinBox()
+        self.smooth_spin.setRange(0, 100)
+        self.smooth_spin.setValue(20)
+        self.smooth_spin.setSingleStep(5)
+        self.smooth_spin.setToolTip("0 = off. Higher = smoother surface (slower).")
+        self.smooth_spin.valueChanged.connect(self._on_smoothing_changed)
+        smooth_lay.addRow("Smooth iterations:", self.smooth_spin)
+
+        lay.addWidget(smooth_grp)
+
         # State
         self._library_dir: Optional[str] = None
         self._lesion_viewer: Optional["LesionViewerWidget"] = None
         self._dicom_spacing: Optional[list] = None
         self._on_spacing_toggle(self.use_dicom_cb.isChecked())
+        self._on_smoothing_changed(self.smooth_spin.value())
+
+    def _on_smoothing_changed(self, val: int):
+        if self._lesion_viewer:
+            self._lesion_viewer.smoothing_iterations = val
 
     def bind_lesion_viewer(self, viewer: LesionViewerWidget):
         self._lesion_viewer = viewer
+        viewer.smoothing_iterations = self.smooth_spin.value()
 
     def set_library_dir(self, path: str):
         self._library_dir = path

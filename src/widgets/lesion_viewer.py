@@ -7,7 +7,7 @@ from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper, vtkRenderer
 from vtkmodules.vtkInteractionWidgets import vtkOrientationMarkerWidget
 from vtkmodules.vtkRenderingAnnotation import vtkAxesActor
 from vtkmodules.vtkCommonDataModel import vtkImageData
-from vtkmodules.vtkFiltersCore import vtkMarchingCubes
+from vtkmodules.vtkFiltersCore import vtkMarchingCubes, vtkWindowedSincPolyDataFilter
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 from vtkmodules.util.numpy_support import numpy_to_vtk
 import scipy.io as sio
@@ -48,6 +48,7 @@ class LesionViewerWidget(QWidget):
         self.current_actor: Optional[vtkActor] = None
         self.current_file: Optional[str] = None
         self._spacing = [1.0, 1.0, 1.0]
+        self._smoothing_iterations = 20
 
         self.placeholder = QLabel(
             "No lesion model loaded.\nSelect a .mat file from the Lesion Library dock."
@@ -58,6 +59,16 @@ class LesionViewerWidget(QWidget):
 
         self.vtk_widget.Initialize()
         self.vtk_widget.Start()
+
+    @property
+    def smoothing_iterations(self):
+        return self._smoothing_iterations
+
+    @smoothing_iterations.setter
+    def smoothing_iterations(self, val: int):
+        self._smoothing_iterations = max(0, int(val))
+        if self.current_file:
+            self.load_mat(self.current_file)
 
     @property
     def spacing(self):
@@ -119,8 +130,23 @@ class LesionViewerWidget(QWidget):
         mc.SetValue(0, 0.5)  # threshold for binary mask
         mc.Update()
 
+        if self._smoothing_iterations > 0:
+            smoother = vtkWindowedSincPolyDataFilter()
+            smoother.SetInputConnection(mc.GetOutputPort())
+            smoother.SetNumberOfIterations(self._smoothing_iterations)
+            smoother.BoundarySmoothingOff()
+            smoother.FeatureEdgeSmoothingOff()
+            smoother.SetFeatureAngle(120.0)
+            smoother.SetPassBand(0.001)  # lower = more aggressive smoothing
+            smoother.NonManifoldSmoothingOn()
+            smoother.NormalizeCoordinatesOn()
+            smoother.Update()
+            pipeline_output = smoother.GetOutputPort()
+        else:
+            pipeline_output = mc.GetOutputPort()
+
         mapper = vtkPolyDataMapper()
-        mapper.SetInputConnection(mc.GetOutputPort())
+        mapper.SetInputConnection(pipeline_output)
         mapper.ScalarVisibilityOff()
 
         # Remove previous actor
