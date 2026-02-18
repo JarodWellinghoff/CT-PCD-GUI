@@ -118,7 +118,7 @@ class DicomViewerWidget(QWidget):
 
         reslice = vtkImageReslice()
         reslice.SetInputConnection(reader.GetOutputPort())
-        reslice.SetOutputSpacing(1, 1, 1)
+        # reslice.SetOutputSpacing(1, 1, 1)
         if self.view_orientation == "coronal":
             reslice.SetResliceAxesDirectionCosines(1, 0, 0, 0, 0, 1, 0, -1, 0)
         elif self.view_orientation == "sagittal":
@@ -138,21 +138,8 @@ class DicomViewerWidget(QWidget):
         # Hide the legacy slice counter; the new overlay_bl covers this info
         self.slice_text.VisibilityOff()
 
-        # ---- Help text ----
-        self.help_text = self._make_text_actor(
-            "Scroll: slice  |  Esc: cancel  |  Dbl-click: add vtx  |  Del: remove vtx",
-            0.5,
-            0.99,
-            11,
-            normalized=True,
-            align_bottom=False,
-            justify_right=False,
-            center=True,
-        )
-
         ren = self.image_viewer.GetRenderer()
         ren.AddViewProp(self.slice_text)
-        ren.AddViewProp(self.help_text)
         ren.SetBackground(self.colors.GetColor3d("Black"))
 
         # ---- Corner overlays ----
