@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QFileDialog,
     QScrollBar,
+    QApplication,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from vtkmodules.vtkCommonColor import vtkNamedColors
@@ -36,6 +37,11 @@ import pydicom
 class DicomViewerWidget(QWidget):
     drawing_cancelled = pyqtSignal()
     dicom_spacing_changed = pyqtSignal(list)  # [sx, sy, sz]
+
+    # Emitted during series load: label, 0-100 int percent, then finished
+    loading_started = pyqtSignal(str)  # message describing what is loading
+    loading_progress = pyqtSignal(int)  # 0-100
+    loading_finished = pyqtSignal()
 
     def __init__(self, dicom_folder=None, view_orientation="axial", parent=None):
         super().__init__(parent)
@@ -176,12 +182,24 @@ class DicomViewerWidget(QWidget):
 
     def _load_series_data(self, folder: str) -> dict:
         folder_path = Path(folder)
+        series_name = folder_path.name
+
+        # --- Emit start (0%) ---
+        self.loading_started.emit(f"Loading: {series_name}")
+        self.loading_progress.emit(0)
+        QApplication.processEvents()
+
         dcm_files = sorted(
             f
             for f in folder_path.iterdir()
             if f.is_file() and not f.name.startswith(".")
         )
         num_slices = len(dcm_files)
+
+        # --- Reading metadata (~10%) ---
+        self.loading_progress.emit(10)
+        QApplication.processEvents()
+
         meta = None
         if dcm_files:
             try:
@@ -189,18 +207,44 @@ class DicomViewerWidget(QWidget):
             except Exception:
                 pass
 
+        # --- VTK DICOM reader (10% → 70%) ---
         reader = vtkDICOMImageReader()
         reader.SetDirectoryName(folder)
+
+        def _on_reader_progress(obj, _event):
+            pct = 10 + int(obj.GetProgress() * 60)
+            self.loading_progress.emit(pct)
+            QApplication.processEvents()
+
+        reader_tag = reader.AddObserver("ProgressEvent", _on_reader_progress)
         reader.Update()
+        reader.RemoveObserver(reader_tag)
+
+        self.loading_progress.emit(70)
+        QApplication.processEvents()
+
         spacing = list(reader.GetOutput().GetSpacing())
 
+        # --- Reslice (70% → 95%) ---
         reslice = vtkImageReslice()
         reslice.SetInputConnection(reader.GetOutputPort())
         if self.view_orientation == "coronal":
             reslice.SetResliceAxesDirectionCosines(1, 0, 0, 0, 0, 1, 0, -1, 0)
         elif self.view_orientation == "sagittal":
             reslice.SetResliceAxesDirectionCosines(0, 1, 0, 0, 0, 1, 1, 0, 0)
+
+        def _on_reslice_progress(obj, _event):
+            pct = 70 + int(obj.GetProgress() * 25)
+            self.loading_progress.emit(pct)
+            QApplication.processEvents()
+
+        reslice_tag = reslice.AddObserver("ProgressEvent", _on_reslice_progress)
         reslice.Update()
+        reslice.RemoveObserver(reslice_tag)
+
+        # --- Done (100%) ---
+        self.loading_progress.emit(100)
+        QApplication.processEvents()
 
         return {
             "folder": folder,
@@ -276,6 +320,7 @@ class DicomViewerWidget(QWidget):
             self.image_viewer.Render()
 
         self._update_series_combo()
+        self.loading_finished.emit()
 
     # ------------------------------------------------------------------
     # Public: add an additional series
@@ -291,6 +336,7 @@ class DicomViewerWidget(QWidget):
         self._series.append(series)
         self._update_series_combo()
         self._switch_series(len(self._series) - 1)
+        self.loading_finished.emit()
 
     # ------------------------------------------------------------------
     # Internal: remove active series

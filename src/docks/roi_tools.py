@@ -68,8 +68,6 @@ class ROIToolsDock(QDockWidget):
             "• Click near contour to select\n"
             "• Drag handles to reshape\n"
             "• Drag body to move\n"
-            "• Double-click edge to add vertex\n"
-            "• Right-click / Del to remove vertex"
         )
         hints.setStyleSheet("color: #888; font-size: 11px;")
         hints.setWordWrap(True)

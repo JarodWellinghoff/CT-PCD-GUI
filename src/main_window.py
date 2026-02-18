@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
     QTabWidget,
     QComboBox,
     QLabel,
+    QProgressBar,
 )
 from PyQt6.QtGui import QAction
 from PyQt6.QtCore import QSize, Qt
@@ -153,9 +154,41 @@ class MainWindow(QMainWindow):
         tb.addWidget(module_label)
         tb.addWidget(module_select)
 
+        # ---- Status bar with persistent progress bar ----
         self.status_bar = self.statusBar()
         if self.status_bar is not None:
+            self._progress_bar = QProgressBar()
+            self._progress_bar.setRange(0, 100)
+            self._progress_bar.setValue(0)
+            self._progress_bar.setFixedWidth(200)
+            self._progress_bar.setFixedHeight(16)
+            self._progress_bar.setTextVisible(True)
+            self._progress_bar.setFormat("%p%")
+            self._progress_bar.hide()  # hidden until a load begins
+            self.status_bar.addPermanentWidget(self._progress_bar)
             self.status_bar.showMessage("Ready", 5000)
+
+        # Connect DicomViewerWidget loading signals → progress bar
+        self.viewer.loading_started.connect(self._on_loading_started)
+        self.viewer.loading_progress.connect(self._on_loading_progress)
+        self.viewer.loading_finished.connect(self._on_loading_finished)
+
+    # ---- Progress bar slots ----
+
+    def _on_loading_started(self, message: str):
+        if self.status_bar:
+            self.status_bar.showMessage(message)
+        self._progress_bar.setValue(0)
+        self._progress_bar.show()
+
+    def _on_loading_progress(self, percent: int):
+        self._progress_bar.setValue(percent)
+
+    def _on_loading_finished(self):
+        self._progress_bar.setValue(100)
+        self._progress_bar.hide()
+        if self.status_bar:
+            self.status_bar.showMessage("Ready", 3000)
 
     # ---- DICOM loading ----
 

@@ -103,8 +103,6 @@ class DrawingInteractorStyle(vtk.vtkInteractorStyleImage):
             self._scroll_bwd(o, e)
         elif key == "Escape":
             self._cancel_drawing()
-        elif key in ("Delete", "BackSpace"):
-            self._delete_hovered_vertex()
 
     def _pick_world(self):
         if not self.image_viewer:
@@ -225,8 +223,6 @@ class DrawingInteractorStyle(vtk.vtkInteractorStyleImage):
                 self._finalize_draw()
             else:
                 self._cancel_drawing()
-        elif self.draw_tool == DrawTool.EDIT:
-            self._delete_hovered_vertex()
         else:
             self.OnRightButtonDown()
 
