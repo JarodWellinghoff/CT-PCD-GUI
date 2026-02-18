@@ -497,11 +497,20 @@ class DicomViewerWidget(QWidget):
             if ps:
                 lines[3] = f"Spacing: {float(ps[0]):.2f} \u00d7 {float(ps[1]):.2f} mm"
             loc = getattr(ds, "SliceLocation", None)
+        if self._resliced_output is not None:
+            img = self._resliced_output
+            origin = img.GetOrigin()
+            spacing = img.GetSpacing()
+            orient = self.image_viewer.GetSliceOrientation()
+            loc = origin[orient] + slice_idx * spacing[orient]
+            lines[4] = f"Loc: {loc:.2f} mm"
+        else:
+            loc = getattr(ds, "SliceLocation", None)
             if loc is not None:
                 lines[4] = f"Loc: {float(loc):.2f} mm"
-            st = getattr(ds, "SliceThickness", None)
-            if st:
-                lines[5] = f"Thick: {float(st):.2f} mm"
+        st = getattr(ds, "SliceThickness", None)
+        if st:
+            lines[5] = f"Thick: {float(st):.2f} mm"
 
         self._overlay_bl.GetMapper().SetInput("\n".join(lines))
 
