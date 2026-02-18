@@ -15,10 +15,11 @@ class SettingsManager:
 
     DEFAULTS = {
         "lesion_library_dir": "",
-        "last_dicom_folder": "",
+        "last_dicom_folder": "",  # legacy – kept for backward compat
+        "last_dicom_folders": [],  # list of all open series folders
         "custom_spacing": [1.0, 1.0, 1.0],
         "use_dicom_spacing": True,
-        "rois": [],  # list of serialised ROI dicts
+        "rois": [],
     }
 
     def __init__(self, path: Path = SETTINGS_FILE):
@@ -35,6 +36,12 @@ class SettingsManager:
                     stored = json.load(f)
                 for k, v in self.DEFAULTS.items():
                     self._data[k] = stored.get(k, v)
+                # Migrate legacy single-folder key to list
+                if (
+                    not self._data["last_dicom_folders"]
+                    and self._data["last_dicom_folder"]
+                ):
+                    self._data["last_dicom_folders"] = [self._data["last_dicom_folder"]]
             except Exception:
                 self._data = dict(self.DEFAULTS)
 
@@ -73,7 +80,6 @@ class SettingsManager:
 
     @staticmethod
     def deserialise_rois(data: list) -> list:
-        """Return list of dicts ready for ROIManager.add_roi()."""
         out = []
         for d in data:
             out.append(

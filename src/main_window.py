@@ -29,15 +29,14 @@ class MainWindow(QMainWindow):
 
         # ---- Central tabs ----
         self.tabs = QTabWidget(self)
-        # Hide the tab bar since we switch programmatically and don't want users clicking
         self.tabs.tabBar().setVisible(False)
         self.setCentralWidget(self.tabs)
 
-        # Tab 2: Lesion 3-D viewer
+        # Tab 1: Lesion 3-D viewer
         self.lesion_viewer = LesionViewerWidget(parent=self)
         self.tabs.addTab(self.lesion_viewer, "Lesion Library")
 
-        # Tab 1: DICOM viewer
+        # Tab 2: DICOM viewer
         self.viewer = DicomViewerWidget(parent=self)
         self.tabs.addTab(self.viewer, "DICOM")
 
@@ -89,11 +88,20 @@ class MainWindow(QMainWindow):
         module_select.setCurrentText(self.current_module)
         module_select.currentTextChanged.connect(self._switch_module)
 
-        act_open = QAction("Open &DICOM...", self)
+        act_open = QAction("Open &DICOM Scan…", self)
         act_open.setShortcut("Ctrl+D")
         act_open.triggered.connect(self._open_dicom)
         if file_m is not None:
             file_m.addAction(act_open)
+
+        act_add_series = QAction("&Add Series to Viewer…", self)
+        act_add_series.setShortcut("Ctrl+Shift+D")
+        act_add_series.triggered.connect(self._add_series)
+        if file_m is not None:
+            file_m.addAction(act_add_series)
+
+        if file_m is not None:
+            file_m.addSeparator()
 
         act_save = QAction("&Save Settings", self)
         act_save.setShortcut("Ctrl+S")
@@ -152,51 +160,84 @@ class MainWindow(QMainWindow):
     # ---- DICOM loading ----
 
     def _open_dicom(self):
+        """Load a new scan – replaces all existing series."""
         folder = QFileDialog.getExistingDirectory(self, "Select DICOM Series Folder")
         if not folder:
             return
         self._load_dicom(folder)
 
-    def _load_dicom(self, folder):
-        self.viewer.cleanup()
-        self.viewer.setParent(None)
-        self.viewer = DicomViewerWidget(folder, "axial", self)
+    def _add_series(self):
+        """Add an additional series from the same (or compatible) scan."""
+        if not self.viewer.loaded_folders:
+            # Nothing loaded yet – treat as a fresh open
+            self._open_dicom()
+            return
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select Additional DICOM Series Folder"
+        )
+        if not folder:
+            return
+        self.viewer.add_series(folder)
+        # Update the details dock to show the newly active series
+        self.dicom_dock.populate_from_folder(folder)
+        if self.status_bar:
+            self.status_bar.showMessage(f"Added series: {folder}", 5000)
+
+    def _load_dicom(self, folder: str):
+        """Reset viewer to a single new series."""
+        self.viewer.load_dicom(folder)
         self.lesion_dock.set_dicom_spacing(self.viewer.dicom_spacing)
-        self.tabs.addTab(self.viewer, "DICOM")
         self.tabs.setCurrentWidget(self.viewer)
         self.roi_dock.bind_viewer(self.viewer)
         self.dicom_dock.populate_from_folder(folder)
-        if self.status_bar is not None:
+        if self.status_bar:
             self.status_bar.showMessage(f"Loaded: {folder}", 5000)
 
     # ---- Settings persistence ----
 
     def _save_settings(self):
         s = self.settings
-        g = self.geometry()
+        s.set("last_dicom_folders", self.viewer.loaded_folders)
+        # Keep legacy key in sync with the first/active folder for older readers
         s.set("last_dicom_folder", self.viewer.dicom_folder or "")
         s.set("lesion_library_dir", self.lesion_dock._library_dir or "")
         s.set("custom_spacing", self.lesion_dock.get_custom_spacing())
         s.set("use_dicom_spacing", self.lesion_dock.use_dicom_cb.isChecked())
         s.set("rois", SettingsManager.serialise_rois(self.viewer.roi_manager.rois))
         s.save()
-        if self.status_bar is not None:
+        if self.status_bar:
             self.status_bar.showMessage(f"Settings saved to {SETTINGS_FILE}", 5000)
 
     def _restore_settings(self):
         s = self.settings
+
         # Lesion library
         lib_dir = s.get("lesion_library_dir")
         if lib_dir:
             self.lesion_dock.set_library_dir(lib_dir)
-        # Custom spacing
         self.lesion_dock.set_custom_spacing(s.get("custom_spacing") or [])
         self.lesion_dock.use_dicom_cb.setChecked(s.get("use_dicom_spacing") or False)
-        # DICOM
-        dicom_folder = s.get("last_dicom_folder")
-        if dicom_folder and Path(dicom_folder).is_dir():
-            self._load_dicom(dicom_folder)
-            # Restore ROIs
+
+        # Gather folders to restore (prefer multi-folder list, fall back to legacy)
+        folders: list[str] = s.get("last_dicom_folders") or []
+        if not folders:
+            legacy = s.get("last_dicom_folder") or ""
+            if legacy:
+                folders = [legacy]
+
+        # Load first valid folder as primary series, add the rest
+        loaded_first = False
+        for folder in folders:
+            if not Path(folder).is_dir():
+                continue
+            if not loaded_first:
+                self._load_dicom(folder)
+                loaded_first = True
+            else:
+                self.viewer.add_series(folder)
+
+        if loaded_first:
+            # Restore ROIs (shared across all series)
             roi_data = SettingsManager.deserialise_rois(s.get("rois") or [])
             ren = (
                 self.viewer.image_viewer.GetRenderer()
@@ -216,13 +257,11 @@ class MainWindow(QMainWindow):
     def _load_settings_action(self):
         self.settings.load()
         self._restore_settings()
-        if self.status_bar is not None:
+        if self.status_bar:
             self.status_bar.showMessage("Settings reloaded", 5000)
 
     def closeEvent(self, a0):
-        # Auto-save on exit
         self._save_settings()
-        # Finalize VTK render windows before Qt destroys native handles
         self.viewer.cleanup()
         self.lesion_viewer.cleanup()
         super().closeEvent(a0)

@@ -3,6 +3,10 @@ from PyQt6.QtWidgets import (
     QLabel,
     QWidget,
     QVBoxLayout,
+    QHBoxLayout,
+    QComboBox,
+    QPushButton,
+    QFileDialog,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from vtkmodules.vtkCommonColor import vtkNamedColors
@@ -24,7 +28,7 @@ import pydicom
 
 
 # ===========================================================================
-# DICOM Viewer widget
+# DICOM Viewer widget – multi-series
 # ===========================================================================
 
 
@@ -36,33 +40,66 @@ class DicomViewerWidget(QWidget):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # ---- Series selector bar (hidden until 2+ series) ----
+        self._series_bar = QWidget()
+        bar_lay = QHBoxLayout(self._series_bar)
+        bar_lay.setContentsMargins(6, 3, 6, 3)
+        bar_lay.addWidget(QLabel("Series:"))
+        self.series_combo = QComboBox()
+        self.series_combo.setMinimumWidth(260)
+        self.series_combo.currentIndexChanged.connect(self._on_combo_changed)
+        bar_lay.addWidget(self.series_combo, 1)
+        self._btn_add_series = QPushButton("＋ Add Series")
+        self._btn_add_series.setFixedWidth(110)
+        self._btn_add_series.clicked.connect(self._add_series_dialog)
+        bar_lay.addWidget(self._btn_add_series)
+        self._btn_remove_series = QPushButton("✕ Remove")
+        self._btn_remove_series.setFixedWidth(90)
+        self._btn_remove_series.clicked.connect(self._remove_active_series)
+        bar_lay.addWidget(self._btn_remove_series)
+        self._series_bar.hide()
+        layout.addWidget(self._series_bar)
+
+        # ---- VTK widget ----
         self.vtk_widget = QVTKRenderWindowInteractor(self)
         layout.addWidget(self.vtk_widget)
+
         self.colors = vtkNamedColors()
         self.interactor_style = None
         self.view_orientation = view_orientation
         self.image_viewer = None
         self.roi_manager = ROIManager()
+
+        # Active metadata (reflects the currently displayed series)
         self.dicom_spacing = [1.0, 1.0, 1.0]
         self.dicom_folder = dicom_folder
-
-        # DICOM metadata cache
-        self._dicom_meta = None  # pydicom dataset for first slice
+        self._dicom_meta = None
         self._dicom_num_slices = 0
-        self._resliced_output = None  # vtkImageData after reslice (for pixel sampling)
+        self._resliced_output = None
         self._initial_parallel_scale = None
-        # W/L tracked in HU units; seeded from DICOM tags, kept live via observer
+
+        # Global W/L (synced across all series)
         self._ww = 400.0
         self._wl = 40.0
 
-        # Overlay text actors (set in load_dicom)
-        self._overlay_tl = None  # top-left:    patient info
-        self._overlay_tr = None  # top-right:   scan info
-        self._overlay_bl = None  # bottom-left: series / geometry info
-        self._overlay_br = None  # bottom-right: zoom / W-L / cursor
+        # Series list and active index
+        # Each entry is a dict: {folder, reader, reslice, spacing, meta,
+        #                        num_slices, label}
+        self._series: list[dict] = []
+        self._active_series_idx = -1
+        self._combo_updating = False  # guard against re-entrant signals
 
+        # Overlay text actors
+        self._overlay_tl = None
+        self._overlay_tr = None
+        self._overlay_bl = None
+        self._overlay_br = None
+
+        # Placeholder label
         self.placeholder = QLabel(
-            "No DICOM series loaded.\nUse File -> Open DICOM... to load a series."
+            "No DICOM series loaded.\nUse File → Open DICOM… to load a series."
         )
         self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.placeholder.setStyleSheet("color: #888; font-size: 14px;")
@@ -74,75 +111,238 @@ class DicomViewerWidget(QWidget):
             self.vtk_widget.hide()
 
     # ------------------------------------------------------------------
-    # Public: load DICOM series
+    # Series management helpers
     # ------------------------------------------------------------------
 
-    def load_dicom(self, dicom_folder):
-        self.placeholder.hide()
-        self.vtk_widget.show()
-        self.dicom_folder = dicom_folder
+    def _build_series_label(self, folder: str, meta) -> str:
+        """Return a short display string for a series."""
+        label = Path(folder).name
+        if meta:
+            snum = str(getattr(meta, "SeriesNumber", "")).strip()
+            sdesc = str(getattr(meta, "SeriesDescription", "")).strip()
+            combined = " – ".join(filter(None, [snum, sdesc]))
+            if combined:
+                label = combined
+        return label
 
-        # ---- Read DICOM metadata via pydicom (first slice) ----
-        folder_path = Path(dicom_folder)
+    def _load_series_data(self, folder: str) -> dict:
+        """Build reader + reslice pipeline for *folder*; return a series entry dict."""
+        folder_path = Path(folder)
         dcm_files = sorted(
             f
             for f in folder_path.iterdir()
             if f.is_file() and not f.name.startswith(".")
         )
-        self._dicom_num_slices = len(dcm_files)
-        self._dicom_meta = None
+        num_slices = len(dcm_files)
+        meta = None
         if dcm_files:
             try:
-                self._dicom_meta = pydicom.dcmread(
-                    str(dcm_files[0]), stop_before_pixels=True
-                )
+                meta = pydicom.dcmread(str(dcm_files[0]), stop_before_pixels=True)
             except Exception:
                 pass
 
-        # Seed W/L from DICOM WindowWidth / WindowCenter tags
-        if self._dicom_meta is not None:
-            ww = getattr(self._dicom_meta, "WindowWidth", None)
-            wc = getattr(self._dicom_meta, "WindowCenter", None)
-            if ww is not None and wc is not None:
-                # Tags may be a list (multiple presets); take the first
-                self._ww = float(ww[0] if hasattr(ww, "__len__") else ww)
-                self._wl = float(wc[0] if hasattr(wc, "__len__") else wc)
-
-        # ---- VTK pipeline ----
         reader = vtkDICOMImageReader()
-        reader.SetDirectoryName(dicom_folder)
+        reader.SetDirectoryName(folder)
         reader.Update()
-
-        self.dicom_spacing = list(reader.GetOutput().GetSpacing())
-        self.dicom_spacing_changed.emit(self.dicom_spacing)
+        spacing = list(reader.GetOutput().GetSpacing())
 
         reslice = vtkImageReslice()
         reslice.SetInputConnection(reader.GetOutputPort())
-        # reslice.SetOutputSpacing(1, 1, 1)
         if self.view_orientation == "coronal":
             reslice.SetResliceAxesDirectionCosines(1, 0, 0, 0, 0, 1, 0, -1, 0)
         elif self.view_orientation == "sagittal":
             reslice.SetResliceAxesDirectionCosines(0, 1, 0, 0, 0, 1, 1, 0, 0)
         reslice.Update()
-        self._resliced_output = reslice.GetOutput()
 
+        return {
+            "folder": folder,
+            "reader": reader,
+            "reslice": reslice,
+            "spacing": spacing,
+            "meta": meta,
+            "num_slices": num_slices,
+            "label": self._build_series_label(folder, meta),
+        }
+
+    def _update_series_combo(self):
+        """Repopulate the combo from self._series; keep current index stable."""
+        self._combo_updating = True
+        self.series_combo.clear()
+        for i, s in enumerate(self._series):
+            self.series_combo.addItem(f"[{i + 1}]  {s['label']}", userData=i)
+        if 0 <= self._active_series_idx < len(self._series):
+            self.series_combo.setCurrentIndex(self._active_series_idx)
+        self._combo_updating = False
+        has_multi = len(self._series) > 1
+        self._series_bar.setVisible(has_multi)
+        self._btn_remove_series.setEnabled(has_multi)
+
+    def _activate_series_metadata(self, s: dict):
+        """Point all active-metadata refs at *s*."""
+        self._dicom_meta = s["meta"]
+        self._dicom_num_slices = s["num_slices"]
+        self._resliced_output = s["reslice"].GetOutput()
+        self.dicom_spacing = s["spacing"]
+        self.dicom_folder = s["folder"]
+
+    # ------------------------------------------------------------------
+    # Public: load first (or replace all) series
+    # ------------------------------------------------------------------
+
+    def load_dicom(self, folder: str):
+        """Reset to a single series.  All previously loaded series are cleared."""
+        self.placeholder.hide()
+        self.vtk_widget.show()
+
+        series = self._load_series_data(folder)
+
+        # Seed W/L from DICOM tags on the very first load
+        if not self._series and series["meta"] is not None:
+            ds = series["meta"]
+            ww = getattr(ds, "WindowWidth", None)
+            wc = getattr(ds, "WindowCenter", None)
+            if ww is not None and wc is not None:
+                self._ww = float(ww[0] if hasattr(ww, "__len__") else ww)
+                self._wl = float(wc[0] if hasattr(wc, "__len__") else wc)
+
+        self._series = [series]
+        self._active_series_idx = 0
+        self._activate_series_metadata(series)
+        self.dicom_spacing_changed.emit(self.dicom_spacing)
+
+        if self.image_viewer is None:
+            self._setup_vtk_pipeline(series)
+        else:
+            # Reconnect existing pipeline to new data
+            self.image_viewer.SetInputConnection(series["reslice"].GetOutputPort())
+            self.image_viewer.UpdateDisplayExtent()
+            style = self.interactor_style
+            if style:
+                style.min_slice = self.image_viewer.GetSliceMin()
+                style.max_slice = self.image_viewer.GetSliceMax()
+                style._set_slice(self.image_viewer.GetSliceMin())
+            self.image_viewer.SetColorWindow(self._ww)
+            self.image_viewer.SetColorLevel(self._wl)
+            self._initial_parallel_scale = (
+                self.image_viewer.GetRenderer().GetActiveCamera().GetParallelScale()
+            )
+            self._update_all_overlays()
+            self.image_viewer.Render()
+
+        self._update_series_combo()
+
+    # ------------------------------------------------------------------
+    # Public: add an additional series
+    # ------------------------------------------------------------------
+
+    def add_series(self, folder: str):
+        """Append a new series to the viewer; does not reset existing series."""
+        if not self._series:
+            self.load_dicom(folder)
+            return
+
+        # Prevent duplicate folders
+        if any(s["folder"] == folder for s in self._series):
+            return
+
+        series = self._load_series_data(folder)
+        self._series.append(series)
+        self._update_series_combo()
+        # Switch to the newly added series
+        self._switch_series(len(self._series) - 1)
+
+    # ------------------------------------------------------------------
+    # Internal: remove active series
+    # ------------------------------------------------------------------
+
+    def _remove_active_series(self):
+        if len(self._series) <= 1:
+            return
+        idx = self._active_series_idx
+        self._series.pop(idx)
+        new_idx = max(0, idx - 1)
+        self._active_series_idx = -1  # force full switch
+        self._update_series_combo()
+        self._switch_series(new_idx)
+
+    # ------------------------------------------------------------------
+    # Internal: switch active series
+    # ------------------------------------------------------------------
+
+    def _on_combo_changed(self, idx: int):
+        if self._combo_updating or idx < 0:
+            return
+        self._switch_series(idx)
+
+    def _switch_series(self, idx: int):
+        if idx < 0 or idx >= len(self._series) or not self.image_viewer:
+            return
+        if idx == self._active_series_idx:
+            return
+
+        self._active_series_idx = idx
+        s = self._series[idx]
+        self._activate_series_metadata(s)
+
+        # Reconnect VTK pipeline
+        self.image_viewer.SetInputConnection(s["reslice"].GetOutputPort())
+        self.image_viewer.UpdateDisplayExtent()
+
+        # Update interactor slice range; preserve current slice where possible
+        style = self.interactor_style
+        if style:
+            new_min = self.image_viewer.GetSliceMin()
+            new_max = self.image_viewer.GetSliceMax()
+            style.min_slice = new_min
+            style.max_slice = new_max
+            clamped = max(new_min, min(style.slice, new_max))
+            # _set_slice handles ROI visibility + render
+            style._set_slice(clamped)
+
+        # Apply synced W/L
+        self.image_viewer.SetColorWindow(self._ww)
+        self.image_viewer.SetColorLevel(self._wl)
+
+        # Sync combo without re-entering
+        self._combo_updating = True
+        self.series_combo.setCurrentIndex(idx)
+        self._combo_updating = False
+
+        self._update_all_overlays()
+        self.image_viewer.Render()
+
+    # ------------------------------------------------------------------
+    # Series dialog (button)
+    # ------------------------------------------------------------------
+
+    def _add_series_dialog(self):
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select Additional DICOM Series Folder"
+        )
+        if folder:
+            self.add_series(folder)
+
+    # ------------------------------------------------------------------
+    # First-time VTK pipeline setup (called once)
+    # ------------------------------------------------------------------
+
+    def _setup_vtk_pipeline(self, series: dict):
         self.image_viewer = vtkImageViewer2()
-        self.image_viewer.SetInputConnection(reslice.GetOutputPort())
+        self.image_viewer.SetInputConnection(series["reslice"].GetOutputPort())
         self.image_viewer.SetRenderWindow(self.vtk_widget.GetRenderWindow())
         self.image_viewer.SetupInteractor(self.vtk_widget)
 
-        # ---- Slice counter (bottom-centre) – kept for interactor_style ----
+        ren = self.image_viewer.GetRenderer()
+        ren.SetBackground(self.colors.GetColor3d("Black"))
+
+        # Legacy slice counter (kept for interactor_style.setup(); hidden)
         self.slice_text = self._make_text_actor(
             "", 15, 10, 20, align_bottom=True, justify_right=False
         )
-        # Hide the legacy slice counter; the new overlay_bl covers this info
         self.slice_text.VisibilityOff()
-
-        ren = self.image_viewer.GetRenderer()
         ren.AddViewProp(self.slice_text)
-        ren.SetBackground(self.colors.GetColor3d("Black"))
 
-        # ---- Corner overlays ----
+        # Corner overlays
         self._overlay_tl = self._make_text_actor(
             "", 0.01, 0.99, 13, normalized=True, align_bottom=False, justify_right=False
         )
@@ -163,29 +363,22 @@ class DicomViewerWidget(QWidget):
         ):
             ren.AddViewProp(actor)
 
-        # Populate static overlays from metadata
-        self._update_overlay_tl()
-        self._update_overlay_tr()
-
-        # ---- Interactor style ----
+        # Interactor style
         self.interactor_style = DrawingInteractorStyle(self)
         self.vtk_widget.SetInteractorStyle(self.interactor_style)
         self.interactor_style.setup(self.image_viewer, self.slice_text)
 
         self.image_viewer.Render()
         ren.ResetCamera()
-        # Apply DICOM W/L to the viewer (overrides VTK's auto-computed display range)
         self.image_viewer.SetColorWindow(self._ww)
         self.image_viewer.SetColorLevel(self._wl)
-        # Capture initial parallel scale for zoom calculation
         self._initial_parallel_scale = ren.GetActiveCamera().GetParallelScale()
 
         self.vtk_widget.Initialize()
         self.vtk_widget.Start()
-        # Capture scale again after Initialize (camera may have been reset)
         self._initial_parallel_scale = ren.GetActiveCamera().GetParallelScale()
 
-        # ---- Dynamic overlay observers ----
+        # Dynamic overlay observers
         interactor = self.vtk_widget.GetRenderWindow().GetInteractor()
         interactor.AddObserver(
             vtkCommand.MouseMoveEvent, self._on_mouse_move_overlay, 0.5
@@ -199,9 +392,17 @@ class DicomViewerWidget(QWidget):
         interactor.AddObserver(
             vtkCommand.MouseWheelBackwardEvent, self._on_interaction_end, 0.5
         )
-        # Keep _ww / _wl in sync when user drags to adjust window/level
         interactor.AddObserver(vtkCommand.WindowLevelEvent, self._on_window_level, 0.5)
 
+        self._update_all_overlays()
+
+    # ------------------------------------------------------------------
+    # Convenience: refresh all four overlays at once
+    # ------------------------------------------------------------------
+
+    def _update_all_overlays(self):
+        self._update_overlay_tl()
+        self._update_overlay_tr()
         self._update_overlay_bl()
         self._update_overlay_br()
 
@@ -243,7 +444,6 @@ class DicomViewerWidget(QWidget):
             series_desc = str(getattr(ds, "SeriesDescription", ""))
             modality = str(getattr(ds, "Modality", ""))
             institution = str(getattr(ds, "InstitutionName", ""))
-            # Format date YYYY-MM-DD if 8 digits
             if len(study_date) == 8 and study_date.isdigit():
                 study_date = f"{study_date[:4]}-{study_date[4:6]}-{study_date[6:]}"
             lines.append(study_date)
@@ -260,7 +460,7 @@ class DicomViewerWidget(QWidget):
         self._overlay_tr.GetMapper().SetInput("\n".join(lines))
 
     # ------------------------------------------------------------------
-    # Overlay: bottom-left – series / geometry info  (updates on slice change)
+    # Overlay: bottom-left – series / geometry info
     # ------------------------------------------------------------------
 
     def _update_overlay_bl(self, slice_idx=None):
@@ -274,42 +474,31 @@ class DicomViewerWidget(QWidget):
 
         ds = self._dicom_meta
         lines = [
-            "Ser: --",
-            "Img: -- / --",
-            "-- \u00d7 -- px",
-            "-- \u00d7 -- mm",
+            "Series: --",
+            "Image: -- / --",
+            "Size: -- × -- px",
+            "Spacing: -- × -- mm",
             "Loc: -- mm",
             "Thick: -- mm",
         ]
 
-        # Series number
         series_num = str(getattr(ds, "SeriesNumber", "--")) if ds else "--"
         lines[0] = f"Series: {series_num}"
 
-        # Image index / total
         total = self._dicom_num_slices if self._dicom_num_slices else "--"
-        current_img = slice_idx + 1
-        lines[1] = f"Image: {current_img} / {total}"
+        lines[1] = f"Image: {slice_idx + 1} / {total}"
 
-        # Pixel dimensions (rows × cols)
         rows = str(getattr(ds, "Rows", "--")) if ds else "--"
         cols = str(getattr(ds, "Columns", "--")) if ds else "--"
         lines[2] = f"Size: {cols} \u00d7 {rows} px"
 
-        # Pixel spacing
         if ds:
             ps = getattr(ds, "PixelSpacing", None)
             if ps:
                 lines[3] = f"Spacing: {float(ps[0]):.2f} \u00d7 {float(ps[1]):.2f} mm"
-
-        # Slice location
-        if ds:
             loc = getattr(ds, "SliceLocation", None)
             if loc is not None:
                 lines[4] = f"Loc: {float(loc):.2f} mm"
-
-        # Slice thickness
-        if ds:
             st = getattr(ds, "SliceThickness", None)
             if st:
                 lines[5] = f"Thick: {float(st):.2f} mm"
@@ -317,7 +506,7 @@ class DicomViewerWidget(QWidget):
         self._overlay_bl.GetMapper().SetInput("\n".join(lines))
 
     # ------------------------------------------------------------------
-    # Overlay: bottom-right – zoom / W-L / cursor  (updates on mouse move)
+    # Overlay: bottom-right – zoom / W-L / cursor
     # ------------------------------------------------------------------
 
     def _update_overlay_br(self, display_x=None, display_y=None):
@@ -326,17 +515,14 @@ class DicomViewerWidget(QWidget):
 
         lines = ["Zoom: --%", "W: --  L: --", "R: --  C: --  HU: --"]
 
-        # ---- Zoom percentage ----
         ren = self.image_viewer.GetRenderer()
         cam = ren.GetActiveCamera()
         if self._initial_parallel_scale and self._initial_parallel_scale > 0:
             zoom_pct = (self._initial_parallel_scale / cam.GetParallelScale()) * 100.0
             lines[0] = f"Zoom: {zoom_pct:.0f}%"
 
-        # ---- Window / Level ----
         lines[1] = f"W: {self._ww:.0f}  L: {self._wl:.0f}"
 
-        # ---- Cursor pixel info ----
         if display_x is not None and display_y is not None:
             info = self._get_pixel_info(display_x, display_y)
             if info is not None:
@@ -350,7 +536,6 @@ class DicomViewerWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _get_pixel_info(self, display_x, display_y):
-        """Return (row, col, scalar_value) for the given display position, or None."""
         if not self.image_viewer or self._resliced_output is None:
             return None
         ren = self.image_viewer.GetRenderer()
@@ -362,38 +547,37 @@ class DicomViewerWidget(QWidget):
         origin = img.GetOrigin()
         spacing = img.GetSpacing()
         dims = img.GetDimensions()
-
         orient = self.image_viewer.GetSliceOrientation()
         sl = self.interactor_style.slice if self.interactor_style else 0
 
-        if orient == 2:  # axial   – z fixed
+        if orient == 2:
             i = int(round((wx - origin[0]) / spacing[0]))
             j = int(round((wy - origin[1]) / spacing[1]))
             k = sl
-        elif orient == 1:  # coronal – y fixed
+        elif orient == 1:
             i = int(round((wx - origin[0]) / spacing[0]))
             j = sl
             k = int(round((wz - origin[2]) / spacing[2]))
-        else:  # sagittal – x fixed
+        else:
             i = sl
             j = int(round((wy - origin[1]) / spacing[1]))
             k = int(round((wz - origin[2]) / spacing[2]))
 
         if 0 <= i < dims[0] and 0 <= j < dims[1] and 0 <= k < dims[2]:
             val = img.GetScalarComponentAsDouble(i, j, k, 0)
-            # row = j (y-axis), col = i (x-axis) in image convention
             return (j, i, val)
         return None
 
     # ------------------------------------------------------------------
-    # VTK event callbacks for dynamic overlays
+    # VTK event callbacks
     # ------------------------------------------------------------------
 
     def _on_window_level(self, obj, event):
-        """Keep stored W/L in sync when user adjusts it via mouse drag."""
+        """Sync W/L change across all series immediately."""
         if self.image_viewer:
             self._ww = self.image_viewer.GetColorWindow()
             self._wl = self.image_viewer.GetColorLevel()
+        # W/L is global – no per-series update needed; overlay will reflect it.
 
     def _on_mouse_move_overlay(self, obj, event):
         if not self.image_viewer:
@@ -401,11 +585,10 @@ class DicomViewerWidget(QWidget):
         interactor = self.vtk_widget.GetRenderWindow().GetInteractor()
         x, y = interactor.GetEventPosition()
         self._update_overlay_br(x, y)
-        self._update_overlay_bl()  # slice index may change via keys
+        self._update_overlay_bl()
         self.image_viewer.Render()
 
     def _on_interaction_end(self, obj, event):
-        """Refresh zoom / W-L after pan, zoom, or window-level gesture."""
         self._update_overlay_br()
         self._update_overlay_bl()
         if self.image_viewer:
@@ -451,8 +634,12 @@ class DicomViewerWidget(QWidget):
             self.roi_manager.select(roi_id, self.image_viewer.GetRenderer())
             self.image_viewer.Render()
 
+    @property
+    def loaded_folders(self) -> list[str]:
+        """Return folders for all currently loaded series."""
+        return [s["folder"] for s in self._series]
+
     def cleanup(self):
-        """Finalize VTK resources before Qt tears down the widget."""
         if self.vtk_widget:
             rw = self.vtk_widget.GetRenderWindow()
             if rw:
@@ -501,17 +688,8 @@ class DicomViewerWidget(QWidget):
         ta.SetPosition(x, y)
         return ta
 
-    # ------------------------------------------------------------------
-    # Legacy helper kept so DrawingInteractorStyle still works
-    # ------------------------------------------------------------------
-
     def _make_text(self, text, x, y, size, align_bottom=False, normalized=False):
-        """Backward-compatible wrapper (used by interactor_style via setup())."""
+        """Backward-compatible wrapper."""
         return self._make_text_actor(
-            text,
-            x,
-            y,
-            size,
-            align_bottom=align_bottom,
-            normalized=normalized,
+            text, x, y, size, align_bottom=align_bottom, normalized=normalized
         )
