@@ -1,18 +1,9 @@
 from typing import Optional
-from PyQt6.QtWidgets import (
-    QLabel,
-    QWidget,
-    QVBoxLayout,
-    QMessageBox,
-)
+from PyQt6.QtWidgets import QLabel, QWidget, QVBoxLayout, QMessageBox
 from PyQt6.QtCore import Qt
 import numpy as np
 import vtkmodules.all as vtk
-from vtkmodules.vtkRenderingCore import (
-    vtkActor,
-    vtkPolyDataMapper,
-    vtkRenderer,
-)
+from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper, vtkRenderer
 from vtkmodules.vtkInteractionWidgets import vtkOrientationMarkerWidget
 from vtkmodules.vtkRenderingAnnotation import vtkAxesActor
 from vtkmodules.vtkCommonDataModel import vtkImageData

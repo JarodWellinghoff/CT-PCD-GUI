@@ -159,6 +159,9 @@ class LesionLibraryDock(QDockWidget):
         self.spin_z.setEnabled(custom_enabled)
         if use_dicom and self._dicom_spacing:
             self._apply_spacing(self._dicom_spacing)
+            self.spin_x.setValue(self._dicom_spacing[0])
+            self.spin_y.setValue(self._dicom_spacing[1])
+            self.spin_z.setValue(self._dicom_spacing[2])
         elif not use_dicom:
             self._apply_spacing(self.get_custom_spacing())
 

@@ -4,6 +4,8 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QToolBar,
     QTabWidget,
+    QComboBox,
+    QLabel,
 )
 from PyQt6.QtGui import QAction
 from PyQt6.QtCore import QSize, Qt
@@ -23,9 +25,12 @@ class MainWindow(QMainWindow):
         geo = [100, 100, 800, 600]
         self.setGeometry(*geo)
         self.title = "DICOM Viewer"
+        self.current_module = "DICOM Viewer"
 
         # ---- Central tabs ----
         self.tabs = QTabWidget(self)
+        # Hide the tab bar since we switch programmatically and don't want users clicking
+        self.tabs.tabBar().setVisible(False)
         self.setCentralWidget(self.tabs)
 
         # Tab 2: Lesion 3-D viewer
@@ -40,10 +45,12 @@ class MainWindow(QMainWindow):
         self.roi_dock = ROIToolsDock(self)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.roi_dock)
         self.roi_dock.bind_viewer(self.viewer)
+        self.roi_dock.hide()
 
         self.lesion_dock = LesionLibraryDock(self)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.lesion_dock)
         self.lesion_dock.bind_lesion_viewer(self.lesion_viewer)
+        self.lesion_dock.hide()
 
         self.dicom_dock = DicomDetailsDock(self)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dicom_dock)
@@ -56,6 +63,18 @@ class MainWindow(QMainWindow):
         self._restore_settings()
         self.setWindowTitle(self.title)
         self.show()
+        self._switch_module(self.current_module)
+
+    def _switch_module(self, module_name):
+        self.current_module = module_name
+        if module_name == "DICOM Viewer":
+            self.tabs.setCurrentWidget(self.viewer)
+            self.lesion_dock.hide()
+            self.roi_dock.show()
+        elif module_name == "Lesion 3D":
+            self.tabs.setCurrentWidget(self.lesion_viewer)
+            self.roi_dock.hide()
+            self.lesion_dock.show()
 
     def _build_ui(self):
         mb = self.menuBar()
@@ -63,6 +82,12 @@ class MainWindow(QMainWindow):
             return
         file_m = mb.addMenu("&File")
         view_m = mb.addMenu("&View")
+
+        module_label = QLabel("Module:", self)
+        module_select = QComboBox(self)
+        module_select.addItems(["DICOM Viewer", "Lesion 3D"])
+        module_select.setCurrentText(self.current_module)
+        module_select.currentTextChanged.connect(self._switch_module)
 
         act_open = QAction("Open &DICOM...", self)
         act_open.setShortcut("Ctrl+D")
@@ -117,8 +142,8 @@ class MainWindow(QMainWindow):
         tb = QToolBar("Main")
         tb.setIconSize(QSize(16, 16))
         self.addToolBar(tb)
-        tb.addAction(act_open)
-        tb.addAction(act_save)
+        tb.addWidget(module_label)
+        tb.addWidget(module_select)
 
         self.status_bar = self.statusBar()
         if self.status_bar is not None:
