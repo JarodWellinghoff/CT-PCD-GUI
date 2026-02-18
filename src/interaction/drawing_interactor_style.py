@@ -73,6 +73,9 @@ class DrawingInteractorStyle(vtk.vtkInteractorStyleImage):
             self.viewer_widget.roi_manager.update_visibility(
                 s, self.image_viewer.GetSliceOrientation()
             )
+            # Notify the viewer widget so the corner overlay updates immediately
+            if hasattr(self.viewer_widget, "_update_overlay_bl"):
+                self.viewer_widget._update_overlay_bl(s)
             self._render()
 
     def _scroll_fwd(self, _o, _e):
