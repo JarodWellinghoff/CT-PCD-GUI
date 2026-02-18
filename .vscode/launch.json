@@ -2,6 +2,14 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "PyQtInspect",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "PyQtInspect",
+      "console": "integratedTerminal",
+      "args": ["--direct", "--file", "${workspaceFolder}/src/app.py"]
+    },
+    {
       "name": "Run App",
       "type": "debugpy",
       "request": "launch",

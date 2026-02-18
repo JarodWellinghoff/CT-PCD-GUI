@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QPushButton,
     QFileDialog,
+    QScrollBar,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from vtkmodules.vtkCommonColor import vtkNamedColors
@@ -42,11 +43,12 @@ class DicomViewerWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # ---- Series selector bar (hidden until 2+ series) ----
+        # ---- Series selector bar  ----
         self._series_bar = QWidget()
         bar_lay = QHBoxLayout(self._series_bar)
         bar_lay.setContentsMargins(6, 3, 6, 3)
         bar_lay.addWidget(QLabel("Series:"))
+        self._series_bar.setFixedHeight(32)
         self.series_combo = QComboBox()
         self.series_combo.setMinimumWidth(260)
         self.series_combo.currentIndexChanged.connect(self._on_combo_changed)
@@ -59,12 +61,34 @@ class DicomViewerWidget(QWidget):
         self._btn_remove_series.setFixedWidth(90)
         self._btn_remove_series.clicked.connect(self._remove_active_series)
         bar_lay.addWidget(self._btn_remove_series)
-        self._series_bar.hide()
         layout.addWidget(self._series_bar)
 
-        # ---- VTK widget ----
+        # ---- VTK widget + slice scrollbar side-by-side ----
+        viewer_row = QHBoxLayout()
+        viewer_row.setContentsMargins(0, 0, 0, 0)
+        viewer_row.setSpacing(0)
+
         self.vtk_widget = QVTKRenderWindowInteractor(self)
-        layout.addWidget(self.vtk_widget)
+        viewer_row.addWidget(self.vtk_widget, 1)
+
+        self._slice_scrollbar = QScrollBar(Qt.Orientation.Vertical, self)
+        self._slice_scrollbar.setMinimum(0)
+        self._slice_scrollbar.setMaximum(0)
+        self._slice_scrollbar.setValue(0)
+        self._slice_scrollbar.setSingleStep(1)
+        self._slice_scrollbar.setPageStep(10)
+        self._slice_scrollbar.setFixedWidth(16)
+        self._slice_scrollbar.setEnabled(False)
+        self._slice_scrollbar.setInvertedAppearance(True)
+        self._slice_scrollbar.valueChanged.connect(self._on_scrollbar_changed)
+        viewer_row.addWidget(self._slice_scrollbar)
+
+        self.viewer_container = QWidget()
+        self.viewer_container.setLayout(viewer_row)
+        layout.addWidget(self.viewer_container, 1)
+
+        # Guard flag – prevents circular updates between scrollbar ↔ VTK
+        self._scrollbar_updating = False
 
         self.colors = vtkNamedColors()
         self.interactor_style = None
@@ -85,11 +109,9 @@ class DicomViewerWidget(QWidget):
         self._wl = 40.0
 
         # Series list and active index
-        # Each entry is a dict: {folder, reader, reslice, spacing, meta,
-        #                        num_slices, label}
         self._series: list[dict] = []
         self._active_series_idx = -1
-        self._combo_updating = False  # guard against re-entrant signals
+        self._combo_updating = False
 
         # Overlay text actors
         self._overlay_tl = None
@@ -98,24 +120,51 @@ class DicomViewerWidget(QWidget):
         self._overlay_br = None
 
         # Placeholder label
-        self.placeholder = QLabel(
-            "No DICOM series loaded.\nUse File → Open DICOM… to load a series."
-        )
+        self.placeholder = QLabel("No DICOM series loaded.")
         self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.placeholder.setStyleSheet("color: #888; font-size: 14px;")
         layout.addWidget(self.placeholder)
 
         if dicom_folder:
             self.load_dicom(dicom_folder)
+            self._slice_scrollbar.show()
+            self.viewer_container.show()
         else:
             self.vtk_widget.hide()
+            self._slice_scrollbar.hide()
+            self.viewer_container.hide()
+
+    # ------------------------------------------------------------------
+    # Scrollbar ↔ slice sync
+    # ------------------------------------------------------------------
+
+    def _configure_scrollbar(self, min_slice: int, max_slice: int, current: int):
+        """Set scrollbar range and value without triggering _on_scrollbar_changed."""
+        self._scrollbar_updating = True
+        self._slice_scrollbar.setMinimum(min_slice)
+        self._slice_scrollbar.setMaximum(max_slice)
+        self._slice_scrollbar.setValue(current)
+        self._slice_scrollbar.setEnabled(max_slice > min_slice)
+        self._scrollbar_updating = False
+
+    def _update_scrollbar_value(self, slice_idx: int):
+        """Called whenever the active slice changes (from VTK side)."""
+        self._scrollbar_updating = True
+        self._slice_scrollbar.setValue(slice_idx)
+        self._scrollbar_updating = False
+
+    def _on_scrollbar_changed(self, value: int):
+        """User dragged the scrollbar – push new slice into the interactor."""
+        if self._scrollbar_updating:
+            return
+        if self.interactor_style:
+            self.interactor_style._set_slice(value)
 
     # ------------------------------------------------------------------
     # Series management helpers
     # ------------------------------------------------------------------
 
     def _build_series_label(self, folder: str, meta) -> str:
-        """Return a short display string for a series."""
         label = Path(folder).name
         if meta:
             snum = str(getattr(meta, "SeriesNumber", "")).strip()
@@ -126,7 +175,6 @@ class DicomViewerWidget(QWidget):
         return label
 
     def _load_series_data(self, folder: str) -> dict:
-        """Build reader + reslice pipeline for *folder*; return a series entry dict."""
         folder_path = Path(folder)
         dcm_files = sorted(
             f
@@ -165,7 +213,6 @@ class DicomViewerWidget(QWidget):
         }
 
     def _update_series_combo(self):
-        """Repopulate the combo from self._series; keep current index stable."""
         self._combo_updating = True
         self.series_combo.clear()
         for i, s in enumerate(self._series):
@@ -173,12 +220,11 @@ class DicomViewerWidget(QWidget):
         if 0 <= self._active_series_idx < len(self._series):
             self.series_combo.setCurrentIndex(self._active_series_idx)
         self._combo_updating = False
-        has_multi = len(self._series) > 1
-        self._series_bar.setVisible(has_multi)
+        has_multi = len(self._series) > 0
         self._btn_remove_series.setEnabled(has_multi)
+        self.series_combo.setEnabled(has_multi)
 
     def _activate_series_metadata(self, s: dict):
-        """Point all active-metadata refs at *s*."""
         self._dicom_meta = s["meta"]
         self._dicom_num_slices = s["num_slices"]
         self._resliced_output = s["reslice"].GetOutput()
@@ -190,13 +236,13 @@ class DicomViewerWidget(QWidget):
     # ------------------------------------------------------------------
 
     def load_dicom(self, folder: str):
-        """Reset to a single series.  All previously loaded series are cleared."""
         self.placeholder.hide()
         self.vtk_widget.show()
+        self._slice_scrollbar.show()
+        self.viewer_container.show()
 
         series = self._load_series_data(folder)
 
-        # Seed W/L from DICOM tags on the very first load
         if not self._series and series["meta"] is not None:
             ds = series["meta"]
             ww = getattr(ds, "WindowWidth", None)
@@ -213,7 +259,6 @@ class DicomViewerWidget(QWidget):
         if self.image_viewer is None:
             self._setup_vtk_pipeline(series)
         else:
-            # Reconnect existing pipeline to new data
             self.image_viewer.SetInputConnection(series["reslice"].GetOutputPort())
             self.image_viewer.UpdateDisplayExtent()
             style = self.interactor_style
@@ -221,6 +266,7 @@ class DicomViewerWidget(QWidget):
                 style.min_slice = self.image_viewer.GetSliceMin()
                 style.max_slice = self.image_viewer.GetSliceMax()
                 style._set_slice(self.image_viewer.GetSliceMin())
+                self._configure_scrollbar(style.min_slice, style.max_slice, style.slice)
             self.image_viewer.SetColorWindow(self._ww)
             self.image_viewer.SetColorLevel(self._wl)
             self._initial_parallel_scale = (
@@ -236,19 +282,14 @@ class DicomViewerWidget(QWidget):
     # ------------------------------------------------------------------
 
     def add_series(self, folder: str):
-        """Append a new series to the viewer; does not reset existing series."""
         if not self._series:
             self.load_dicom(folder)
             return
-
-        # Prevent duplicate folders
         if any(s["folder"] == folder for s in self._series):
             return
-
         series = self._load_series_data(folder)
         self._series.append(series)
         self._update_series_combo()
-        # Switch to the newly added series
         self._switch_series(len(self._series) - 1)
 
     # ------------------------------------------------------------------
@@ -256,12 +297,12 @@ class DicomViewerWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _remove_active_series(self):
-        if len(self._series) <= 1:
-            return
+        # if len(self._series) <= 1:
+        #     return
         idx = self._active_series_idx
         self._series.pop(idx)
         new_idx = max(0, idx - 1)
-        self._active_series_idx = -1  # force full switch
+        self._active_series_idx = -1
         self._update_series_combo()
         self._switch_series(new_idx)
 
@@ -276,6 +317,10 @@ class DicomViewerWidget(QWidget):
 
     def _switch_series(self, idx: int):
         if idx < 0 or idx >= len(self._series) or not self.image_viewer:
+            self.vtk_widget.hide()
+            self._slice_scrollbar.hide()
+            self.viewer_container.hide()
+            self.placeholder.show()
             return
         if idx == self._active_series_idx:
             return
@@ -284,11 +329,9 @@ class DicomViewerWidget(QWidget):
         s = self._series[idx]
         self._activate_series_metadata(s)
 
-        # Reconnect VTK pipeline
         self.image_viewer.SetInputConnection(s["reslice"].GetOutputPort())
         self.image_viewer.UpdateDisplayExtent()
 
-        # Update interactor slice range; preserve current slice where possible
         style = self.interactor_style
         if style:
             new_min = self.image_viewer.GetSliceMin()
@@ -296,14 +339,12 @@ class DicomViewerWidget(QWidget):
             style.min_slice = new_min
             style.max_slice = new_max
             clamped = max(new_min, min(style.slice, new_max))
-            # _set_slice handles ROI visibility + render
             style._set_slice(clamped)
+            self._configure_scrollbar(new_min, new_max, clamped)
 
-        # Apply synced W/L
         self.image_viewer.SetColorWindow(self._ww)
         self.image_viewer.SetColorLevel(self._wl)
 
-        # Sync combo without re-entering
         self._combo_updating = True
         self.series_combo.setCurrentIndex(idx)
         self._combo_updating = False
@@ -335,14 +376,12 @@ class DicomViewerWidget(QWidget):
         ren = self.image_viewer.GetRenderer()
         ren.SetBackground(self.colors.GetColor3d("Black"))
 
-        # Legacy slice counter (kept for interactor_style.setup(); hidden)
         self.slice_text = self._make_text_actor(
             "", 15, 10, 20, align_bottom=True, justify_right=False
         )
         self.slice_text.VisibilityOff()
         ren.AddViewProp(self.slice_text)
 
-        # Corner overlays
         self._overlay_tl = self._make_text_actor(
             "", 0.01, 0.99, 13, normalized=True, align_bottom=False, justify_right=False
         )
@@ -363,7 +402,6 @@ class DicomViewerWidget(QWidget):
         ):
             ren.AddViewProp(actor)
 
-        # Interactor style
         self.interactor_style = DrawingInteractorStyle(self)
         self.vtk_widget.SetInteractorStyle(self.interactor_style)
         self.interactor_style.setup(self.image_viewer, self.slice_text)
@@ -378,7 +416,13 @@ class DicomViewerWidget(QWidget):
         self.vtk_widget.Start()
         self._initial_parallel_scale = ren.GetActiveCamera().GetParallelScale()
 
-        # Dynamic overlay observers
+        # Initialise scrollbar now that min/max are known
+        self._configure_scrollbar(
+            self.interactor_style.min_slice,
+            self.interactor_style.max_slice,
+            self.interactor_style.slice,
+        )
+
         interactor = self.vtk_widget.GetRenderWindow().GetInteractor()
         interactor.AddObserver(
             vtkCommand.MouseMoveEvent, self._on_mouse_move_overlay, 0.5
@@ -471,6 +515,9 @@ class DicomViewerWidget(QWidget):
             slice_idx = self.interactor_style.slice
         elif slice_idx is None:
             slice_idx = self.image_viewer.GetSliceMin()
+
+        # Keep scrollbar in sync whenever the overlay is refreshed
+        self._update_scrollbar_value(slice_idx)
 
         ds = self._dicom_meta
         lines = [
@@ -582,11 +629,9 @@ class DicomViewerWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _on_window_level(self, obj, event):
-        """Sync W/L change across all series immediately."""
         if self.image_viewer:
             self._ww = self.image_viewer.GetColorWindow()
             self._wl = self.image_viewer.GetColorLevel()
-        # W/L is global – no per-series update needed; overlay will reflect it.
 
     def _on_mouse_move_overlay(self, obj, event):
         if not self.image_viewer:
@@ -645,7 +690,6 @@ class DicomViewerWidget(QWidget):
 
     @property
     def loaded_folders(self) -> list[str]:
-        """Return folders for all currently loaded series."""
         return [s["folder"] for s in self._series]
 
     def cleanup(self):
