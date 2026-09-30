@@ -4,7 +4,7 @@
 # virtual environment
 *venv/
 *env/
-
+flat/
 *~
 *.autosave
 *.a
@@ -86,4 +86,4 @@ CMakeLists.txt.user*
 /build*/
 __pycache__
 
-original code/
+*.egg-info/
