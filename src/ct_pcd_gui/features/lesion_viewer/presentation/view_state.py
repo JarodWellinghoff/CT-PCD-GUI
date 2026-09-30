@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
@@ -19,6 +21,19 @@ class AppearanceState:
     representation: str
     show_edges: bool
     parallel_projection: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SurfaceSettings:
+    axis_order: str
+    spacing_xyz: tuple[float, float, float]
+    threshold: float
+    foreground_below: bool
+    downsample: int
+    smoothing_iterations: int
+    reduction_percent: int
+    largest_component_only: bool
+    pad_border: bool
 
 
 @dataclass(frozen=True, slots=True)
