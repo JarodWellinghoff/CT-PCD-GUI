@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -20,7 +19,6 @@ from ct_pcd_gui.features.noise_insertion.application.validation import validate_
 from ct_pcd_gui.features.noise_insertion.infrastructure import executor_adapter
 from ct_pcd_gui.features.noise_insertion.infrastructure.dicom_io import (
     TAG_TUBE_CURRENT,
-    TUBE_CURRENT_UPDATE_ENV,
     update_tube_current,
 )
 from ct_pcd_gui.features.noise_insertion.presentation.panel import NoiseInsertionPanel
@@ -119,7 +117,7 @@ class _Runner:
 class _UseCase:
     def execute(self, config, *, cancel_event, callbacks) -> JobSummary:
         assert not cancel_event.is_set()
-        assert config.update_tube_current is True
+        assert not hasattr(config, "update_tube_current")
         callbacks.log("Processing test input")
         callbacks.started(3, 1, 2)
         callbacks.progress(1, 3, "Generated noise")
@@ -135,7 +133,6 @@ def _draft(input_path: Path, output_dir: Path) -> NoiseJobDraft:
         electronic_noise=0.0,
         seed=42,
         file_suffix="_noise",
-        update_tube_current=True,
         overwrite_existing=False,
         recursive=False,
         continue_on_error=True,
@@ -150,6 +147,8 @@ def test_panel_reports_missing_paths_instead_of_raising(qtbot) -> None:
     qtbot.addWidget(panel)
     messages: list[str] = []
     panel.validation_failed.connect(messages.append)
+
+    assert not hasattr(panel, "update_tube_current")
 
     panel.start_button.click()
 
@@ -229,7 +228,6 @@ def test_executor_adapter_supplies_live_cancel_event(
 
     def run_noise_job(config, **kwargs):
         observed["run_cancel_event"] = kwargs["cancel_event"]
-        observed["tube_setting"] = os.environ[TUBE_CURRENT_UPDATE_ENV]
         executor_adapter.executor.discover_work_items(
             config,
             object(),
@@ -239,12 +237,10 @@ def test_executor_adapter_supplies_live_cancel_event(
 
     monkeypatch.setattr(executor_adapter.executor, "discover_work_items", discover)
     monkeypatch.setattr(executor_adapter.executor, "run_noise_job", run_noise_job)
-    monkeypatch.delenv(TUBE_CURRENT_UPDATE_ENV, raising=False)
 
     config = NoiseJobConfig(
         input_path=str(tmp_path),
         output_dir=str(tmp_path / "output"),
-        update_tube_current=False,
     )
     callbacks = NoiseJobCallbacks(
         log=lambda _message: None,
@@ -262,20 +258,14 @@ def test_executor_adapter_supplies_live_cancel_event(
     assert summary == JobSummary()
     assert observed["run_cancel_event"] is cancel_event
     assert observed["discovery_cancel_event"] is cancel_event
-    assert observed["tube_setting"] == "0"
-    assert TUBE_CURRENT_UPDATE_ENV not in os.environ
 
 
-def test_tube_current_update_option(monkeypatch) -> None:
+def test_tube_current_is_always_scaled() -> None:
     dataset = Dataset()
     dataset.add_new(TAG_TUBE_CURRENT, "IS", 200)
 
-    monkeypatch.setenv(TUBE_CURRENT_UPDATE_ENV, "0")
     update_tube_current(dataset, 0.25)
-    assert int(dataset[TAG_TUBE_CURRENT].value) == 200
 
-    monkeypatch.setenv(TUBE_CURRENT_UPDATE_ENV, "1")
-    update_tube_current(dataset, 0.25)
     assert int(dataset[TAG_TUBE_CURRENT].value) == 50
 
 
@@ -291,5 +281,5 @@ def test_validation_rejects_blank_input_and_file_output(tmp_path: Path) -> None:
     output_file.write_text("x", encoding="utf-8")
     with pytest.raises(ValueError, match="not a directory"):
         validate_config(
-            NoiseJobConfig(input_path=str(input_diäK›]]Ÿ\è\›ä›]]Ÿö[JJBà
-B
+            NoiseJobConfig(input_path=str(input_dir), output_dir=str(output_file))
+        )

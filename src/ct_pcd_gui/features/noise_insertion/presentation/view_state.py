@@ -21,7 +21,6 @@ class NoiseJobDraft:
     electronic_noise: float
     seed: int | None
     file_suffix: str
-    update_tube_current: bool
     overwrite_existing: bool
     recursive: bool
     continue_on_error: bool

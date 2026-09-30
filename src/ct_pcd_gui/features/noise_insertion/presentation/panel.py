@@ -144,12 +144,6 @@ class NoiseInsertionPanel(QWidget):
         seed_layout.addWidget(self.seed, 1)
         settings_form.addRow("Randomization:", seed_row)
 
-        self.update_tube_current = QCheckBox(
-            "Scale XrayTubeCurrent by the mAs factor when present",
-            self,
-        )
-        self.update_tube_current.setChecked(True)
-        settings_form.addRow("", self.update_tube_current)
         settings_section.add_layout(settings_form)
         inner_layout.addWidget(settings_section)
 
@@ -291,7 +285,6 @@ class NoiseInsertionPanel(QWidget):
             electronic_noise=float(self.electronic_noise.value()),
             seed=int(self.seed.value()) if self.use_seed.isChecked() else None,
             file_suffix=self.file_suffix.text(),
-            update_tube_current=self.update_tube_current.isChecked(),
             overwrite_existing=self.overwrite_existing.isChecked(),
             recursive=self.recursive.isChecked(),
             continue_on_error=self.continue_on_error.isChecked(),
@@ -322,7 +315,6 @@ class NoiseInsertionPanel(QWidget):
             self.mas_factor,
             self.electronic_noise,
             self.use_seed,
-            self.update_tube_current,
             self.parallel_mode,
             self.max_workers,
             self.preview_interval,

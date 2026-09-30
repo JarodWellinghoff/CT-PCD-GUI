@@ -15,7 +15,6 @@ class NoiseJobConfig:
     electronic_noise: float = 0.0
     seed: int | None = 42
     file_suffix: str = "_noise"
-    update_tube_current: bool = True
     overwrite_existing: bool = False
     recursive: bool = False
     continue_on_error: bool = True

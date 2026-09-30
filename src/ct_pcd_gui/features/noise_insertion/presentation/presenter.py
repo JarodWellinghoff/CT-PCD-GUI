@@ -220,7 +220,6 @@ def _config_from_draft(draft: NoiseJobDraft) -> NoiseJobConfig:
         electronic_noise=draft.electronic_noise,
         seed=draft.seed,
         file_suffix=draft.file_suffix,
-        update_tube_current=draft.update_tube_current,
         overwrite_existing=draft.overwrite_existing,
         recursive=draft.recursive,
         continue_on_error=draft.continue_on_error,

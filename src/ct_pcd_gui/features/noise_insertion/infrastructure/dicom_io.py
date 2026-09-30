@@ -18,7 +18,6 @@ TAG_PIXEL_REPRESENTATION = Tag(0x0028, 0x0103)
 TAG_PIXEL_DATA = Tag(0x7FE0, 0x0010)
 TAG_EXTENDED_OFFSET_TABLE = Tag(0x7FE0, 0x0001)
 TAG_EXTENDED_OFFSET_TABLE_LENGTHS = Tag(0x7FE0, 0x0002)
-TUBE_CURRENT_UPDATE_ENV = "CT_PCD_GUI_UPDATE_TUBE_CURRENT"
 _DCMWRITE_SUPPORTS_ENFORCE = "enforce_file_format" in inspect.signature(
     dcmwrite
 ).parameters
@@ -101,14 +100,7 @@ def set_uncompressed_pixel_data(dataset: Dataset, encoded: np.ndarray) -> None:
     element.VR = "OB" if bits_allocated <= 8 else "OW"
 
 
-def tube_current_update_enabled() -> bool:
-    value = os.environ.get(TUBE_CURRENT_UPDATE_ENV, "1").strip().lower()
-    return value not in {"0", "false", "no", "off"}
-
-
 def update_tube_current(dataset: Dataset, mas_factor: float) -> None:
-    if not tube_current_update_enabled():
-        return
     if TAG_TUBE_CURRENT in dataset:
         try:
             original = float(dataset[TAG_TUBE_CURRENT].value)
