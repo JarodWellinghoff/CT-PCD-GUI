@@ -1,0 +1,28 @@
+Metadata-Version: 2.4
+Name: dicom-ctpd-noise-gui
+Version: 0.1.0
+Summary: PySide6 workbench for DICOM-CT-PD processing and lesion-model viewing
+Requires-Python: >=3.10
+Requires-Dist: PySide6>=6.7
+Requires-Dist: numpy>=1.26
+Requires-Dist: pydicom<4,>=2.4
+Requires-Dist: scipy>=1.11
+Requires-Dist: vtk>=9.3
+Requires-Dist: h5py>=3.10
+Provides-Extra: comparison
+Requires-Dist: matplotlib>=3.8; extra == "comparison"
+Requires-Dist: scikit-image>=0.22; extra == "comparison"
+Provides-Extra: conversion
+Requires-Dist: tqdm>=4.66; extra == "conversion"
+Provides-Extra: lesion-extraction
+Requires-Dist: pynrrd>=1.0; extra == "lesion-extraction"
+Requires-Dist: SimpleITK>=2.3; extra == "lesion-extraction"
+Requires-Dist: pandas>=2.1; extra == "lesion-extraction"
+Requires-Dist: openpyxl>=3.1; extra == "lesion-extraction"
+Requires-Dist: tqdm>=4.66; extra == "lesion-extraction"
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+Requires-Dist: pytest-qt>=4.4; extra == "dev"
+Requires-Dist: pytest-cov>=5; extra == "dev"
+Requires-Dist: ruff>=0.6; extra == "dev"
+Requires-Dist: pyright>=1.1; extra == "dev"

@@ -1,0 +1,6 @@
+[console_scripts]
+ct-pcd-combine = ct_pcd_gui.cli.combine_dicom:main
+ct-pcd-compare-noise = ct_pcd_gui.cli.compare_noise:main
+ct-pcd-extract-frames = ct_pcd_gui.cli.extract_dicom_frames:main
+ct-pcd-extract-lesions = ct_pcd_gui.cli.extract_lesions:main
+ct-pcd-gui = ct_pcd_gui.bootstrap:main

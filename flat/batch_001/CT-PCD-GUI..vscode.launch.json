@@ -1,0 +1,111 @@
+{
+  // IntelliSense is supported in this JSON-with-comments file.
+  "version": "0.2.0",
+
+  "configurations": [
+    {
+      "name": "Python Debugger: Current File",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "QT_API": "pyside6"
+      }
+    },
+
+    {
+      "name": "GUI: CT-PCD Workbench",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ct_pcd_gui",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "subProcess": true,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "QT_API": "pyside6"
+      }
+    },
+
+    {
+      "name": "CLI: Combine DICOM",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ct_pcd_gui.cli.combine_dicom",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "subProcess": true,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      },
+      "args": [
+        "U:/PUBLIC/DICOM-CTPD/Test_cases/single_frame",
+        "--output-root",
+        "U:/PUBLIC/DICOM-CTPD/Test_cases/multi_frame_4GB",
+        "--max-pixel-mib",
+        "4096",
+        "--max-frames-per-chunk",
+        "999999999"
+      ]
+    },
+    {
+      "name": "Print Tree",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/tools/directory_tree.py",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "args": [
+        "${workspaceFolder}",
+        "--ignore-dir",
+        ".git",
+        "--ignore-dir",
+        "__pycache__",
+        "--ignore-dir",
+        ".venv",
+        "--ignore-dir",
+        "dicom_ctpd_noise_gui.egg-info",
+        "--ignore-dir",
+        "flat"
+      ]
+    },
+    {
+      "name": "Flatten Directory",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/tools/flatten_directory.py",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "args": [
+        "${workspaceFolder}",
+        // "--dry-run",
+        "--overwrite",
+        "--output",
+        "${workspaceFolder}/flat",
+        "--batch-size",
+        "20",
+        "--include-parent",
+        "--ignore-dir",
+        ".git",
+        "--ignore-dir",
+        "__pycache__",
+        "--ignore-dir",
+        ".venv",
+        "--ignore-dir",
+        "dicom_ctpd_noise_gui.egg-info",
+        "--ignore-dir",
+        "${workspaceFolder}/flat"
+      ]
+    }
+  ]
+}
