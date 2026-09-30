@@ -1,13 +1,17 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 
-from ct_pcd_gui.shell.module_registry import ModuleDescriptor
-from ct_pcd_gui.shared.qt.task_runner import QtTaskRunner
-from .panel import NoiseInsertionPanel
-from .workspace import NoiseInsertionWorkspace
-from .presenter import NoiseInsertionPresenter
-from ..infrastructure.executor import DefaultNoiseJobExecutor
-from ..application.use_case import RunNoiseInsertion
 from PySide6.QtWidgets import QMessageBox
+
+from ct_pcd_gui.shared.qt.task_runner import QtTaskRunner
+from ct_pcd_gui.shell.module_registry import ModuleDescriptor
+
+from ..application.use_case import RunNoiseInsertion
+from ..infrastructure.executor_adapter import DefaultNoiseJobExecutor
+from .panel import NoiseInsertionPanel
+from .presenter import NoiseInsertionPresenter
+from .workspace import NoiseInsertionWorkspace
 
 
 @dataclass(slots=True)
@@ -23,6 +27,7 @@ class NoiseInsertionModule:
             panel=self.panel,
             workspace=self.workspace,
             status_text="Configure a noise insertion job",
+            owner=self.presenter,
             show_panel=True,
             is_busy=lambda: self.presenter.is_running,
             request_cancel=self.presenter.cancel,
@@ -35,30 +40,14 @@ def build_noise_insertion_module(
 ) -> ModuleDescriptor:
     panel = NoiseInsertionPanel()
     workspace = NoiseInsertionWorkspace()
-    executor = DefaultNoiseJobExecutor()
-    use_case = RunNoiseInsertion(executor)
     presenter = NoiseInsertionPresenter(
         panel=panel,
         workspace=workspace,
-        use_case=use_case,
+        use_case=RunNoiseInsertion(DefaultNoiseJobExecutor()),
         task_runner=task_runner,
         parent=panel,
     )
-
     presenter.error_requested.connect(
         lambda title, message: QMessageBox.critical(panel, title, message)
     )
-
-    return ModuleDescriptor(
-        module_id="noise-insertion",
-        display_name="Noise Insertion",
-        panel=panel,
-        workspace=workspace,
-        status_text="Configure a noise insertion job",
-        show_panel=True,
-        is_busy=lambda: presenter.is_running,
-        request_cancel=presenter.cancel,
-        cleanup=presenter.cleanup,
-        # Add this field to ModuleDescriptor as described below.
-        owner=presenter,
-    )
+    return NoiseInsertionModule(panel, workspace, presenter).descriptor()

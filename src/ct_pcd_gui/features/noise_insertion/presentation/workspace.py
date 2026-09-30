@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -18,7 +19,8 @@ from PySide6.QtWidgets import (
 )
 
 from ct_pcd_gui.shared.qt.scaled_image_label import ScaledImageLabel
-from ..application.models import PreviewPayload, JobSummary, JobStarted, JobProgress
+
+from ..application.models import JobProgress, JobStarted, JobSummary, PreviewPayload
 
 
 class PreviewDisplay(QFrame):
@@ -182,25 +184,43 @@ class NoiseInsertionWorkspace(QWidget):
         self.log.setTextCursor(cursor)
 
     def show_inspecting(self, preview_interval: int) -> None:
-        pass
+        self.reset_for_job(preview_interval)
+        self.append_log("Inspecting input files and preparing the processing plan.")
 
     def show_cancelling(self) -> None:
-        pass
+        self.progress_status.setText("Cancelling...")
+        if self.progress_bar.maximum() > 0:
+            self.progress_bar.setFormat("Cancelling at %v / %m work units")
+        self.append_log(
+            "Cancellation requested. Active work will stop at the next safe boundary."
+        )
 
     def show_started(self, event: JobStarted) -> None:
-        pass
+        self.configure_progress(
+            event.total_units,
+            event.file_count,
+            event.frame_count,
+        )
 
     def show_progress(self, event: JobProgress) -> None:
-        pass
+        self.set_progress(event.completed_units, event.total_units, event.status)
 
     def show_completed(self, summary: JobSummary) -> None:
-        pass
+        self.mark_finished(summary)
+        self.append_log(
+            f"Summary: {summary.written_files} output file(s), "
+            f"{summary.failed_files} failed, {summary.skipped_files} skipped, "
+            f"{summary.clipped_pixels:,} clipped pixel(s), maximum "
+            f"{summary.max_workers} parallel worker(s)."
+        )
 
     def show_cancelled(self, message: str) -> None:
-        pass
+        self.mark_cancelled()
+        self.append_log(message or "Noise insertion was cancelled.")
 
     def show_failed(self, message: str) -> None:
-        pass
+        self.mark_failed()
+        self.append_log(f"Job stopped: {message}")
 
     def reset_for_job(self, preview_interval: int) -> None:
         self.clear_log()
@@ -242,9 +262,10 @@ class NoiseInsertionWorkspace(QWidget):
         )
 
     def set_progress(self, completed: int, total: int, status: str) -> None:
-        if self.progress_bar.maximum() != max(1, total):
-            self.progress_bar.setRange(0, max(1, total))
-        self.progress_bar.setValue(min(completed, max(1, total)))
+        maximum = max(1, total)
+        if self.progress_bar.maximum() != maximum:
+            self.progress_bar.setRange(0, maximum)
+        self.progress_bar.setValue(min(completed, maximum))
         self.progress_status.setText(status)
 
     @Slot(object)
@@ -277,9 +298,7 @@ class NoiseInsertionWorkspace(QWidget):
             f"{summary.failed_files} failed, {summary.skipped_files} skipped"
         )
         if self._preview_interval > 0 and self._latest_preview_iteration == 0:
-            self.preview_note.setText(
-                "Finished without generating a scheduled preview."
-            )
+            self.preview_note.setText("Finished without generating a scheduled preview.")
             self.preview_display.clear_preview(
                 "No scheduled preview target completed. The interval may exceed the "
                 "projection count, or the target input may have been skipped or failed."
