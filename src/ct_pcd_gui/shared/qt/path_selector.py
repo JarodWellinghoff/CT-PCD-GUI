@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+
 from PySide6.QtCore import Signal, Slot
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -55,7 +56,7 @@ class PathSelector(QWidget):
         self.file_button: QPushButton | None = None
         if allow_file:
             self.file_button = QPushButton("File...", self)
-            self.file_button.setToolTip(self.file_caption)
+            self.file_button.setToolTip(self.file_tooltip or self.file_caption)
             self.file_button.clicked.connect(self._choose_file)
             layout.addWidget(self.file_button)
 
@@ -70,7 +71,11 @@ class PathSelector(QWidget):
         start = self.text() or str(Path.home())
         if Path(start).is_file():
             start = str(Path(start).parent)
-        chosen = QFileDialog.getExistingDirectory(self, self.folder_caption, start)
+        chosen = QFileDialog.getExistingDirectory(
+            self,
+            self.folder_caption,
+            start,
+        )
         if chosen:
             self.set_text(chosen)
             self.userPathChanged.emit(chosen)
@@ -80,11 +85,14 @@ class PathSelector(QWidget):
         start = self.text() or str(Path.home())
         if Path(start).is_dir():
             start = str(Path(start))
+        selected_filter = self.file_filter
+        if self.allow_all_files and "All files (*)" not in selected_filter:
+            selected_filter = f"{selected_filter};;All files (*)"
         chosen, _ = QFileDialog.getOpenFileName(
             self,
             self.file_caption,
             start,
-            f"{self.file_filter}{";;All files (*)" if self.allow_all_files  else ""}",
+            selected_filter,
         )
         if chosen:
             self.set_text(chosen)
