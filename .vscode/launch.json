@@ -37,21 +37,16 @@
       "name": "CLI: Combine DICOM",
       "type": "debugpy",
       "request": "launch",
-      "module": "ct_pcd_gui.cli.combine_dicom",
+      "program": "${workspaceFolder}/archive/legacy/original_code/combine.py",
       "cwd": "${workspaceFolder}",
       "python": "${workspaceFolder}/.venv/Scripts/python.exe",
       "console": "integratedTerminal",
-      "justMyCode": true,
-      "subProcess": true,
-      "env": {
-        "PYTHONPATH": "${workspaceFolder}/src"
-      },
       "args": [
         "U:/PUBLIC/DICOM-CTPD/Test_cases/single_frame",
         "--output-root",
-        "U:/PUBLIC/DICOM-CTPD/Test_cases/multi_frame_4GB",
+        "U:/PUBLIC/DICOM-CTPD/Test_cases/multi_frame",
         "--max-pixel-mib",
-        "4096",
+        "1024",
         "--max-frames-per-chunk",
         "999999999"
       ]

@@ -44,8 +44,50 @@ class NoiseInsertionPresenter(QObject):
 
     @Slot(object)
     def start(self, draft: NoiseJobDraft) -> None:
-        # Your existing start implementation goes here.
-        ...
+
+        if self.is_running:
+            return
+
+        self._workspace.reset_for_job(draft.preview_interval)
+        self._panel.render_state(True)
+        self.running_changed.emit(True)
+
+        self.thread = QThread(self)
+        self.worker = NoiseInsertionWorker(config)
+        self.worker.moveToThread(self.thread)
+
+        self.thread.started.connect(self.worker.run)
+        self.worker.jobStarted.connect(self.workspace.configure_progress)
+        self.worker.progressChanged.connect(self.workspace.set_progress)
+        self.worker.logMessage.connect(self.workspace.append_log)
+        self.worker.previewReady.connect(self.workspace.update_preview)
+        self.worker.completed.connect(self._completed)
+        self.worker.cancelled.connect(self._cancelled)
+        self.worker.failed.connect(self._failed)
+
+        self.worker.completed.connect(self.thread.quit)
+        self.worker.cancelled.connect(self.thread.quit)
+        self.worker.failed.connect(self.thread.quit)
+        self.thread.finished.connect(self._thread_finished)
+        self.thread.finished.connect(self.worker.deleteLater)
+        self.thread.finished.connect(self.thread.deleteLater)
+        self.thread.start()
+        try:
+            summary = run_noise_job(
+                self.config,
+                cancel_event=self.cancel_event,
+                log_callback=self.logMessage.emit,
+                started_callback=self.jobStarted.emit,
+                progress_callback=self.progressChanged.emit,
+                preview_callback=self.previewReady.emit,
+            )
+        except NoiseInsertionCancelled as exc:
+            self.cancelled.emit(str(exc))
+        except Exception as exc:
+            self.logMessage.emit(f"FATAL: {exc}")
+            self.failed.emit(str(exc))
+        else:
+            self.completed.emit(summary)
 
     @Slot()
     def cancel(self) -> None:
