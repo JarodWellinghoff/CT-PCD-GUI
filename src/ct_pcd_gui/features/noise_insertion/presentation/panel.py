@@ -1,9 +1,10 @@
-"""PySide6 widgets and worker for the DICOM-CT-PD noise insertion module."""
+"""Configuration panel for the DICOM-CT-PD noise insertion module."""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
+
 from PySide6.QtCore import Signal, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -22,15 +23,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-
 from ct_pcd_gui.shared.qt.collapsible_section import CollapsibleSection
 from ct_pcd_gui.shared.qt.path_selector import PathSelector
-from .view_state import NoiseJobDraft, NoiseViewState, NoiseJobPhase
+
+from .view_state import NoiseJobDraft, NoiseViewState
 
 
 class NoiseInsertionPanel(QWidget):
     run_requested = Signal(object)
     cancel_requested = Signal()
+    validation_failed = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -300,12 +302,16 @@ class NoiseInsertionPanel(QWidget):
 
     @Slot()
     def _emit_run_requested(self) -> None:
-        self.run_requested.emit(self.read_draft())
+        try:
+            draft = self.read_draft()
+        except ValueError as exc:
+            self.validation_failed.emit(str(exc))
+            return
+        self.run_requested.emit(draft)
 
     def render_state(self, state: NoiseViewState) -> None:
-        running = state.phase == NoiseJobPhase.RUNNING
-        self.start_button.setEnabled(not running)
-        self.cancel_button.setEnabled(running)
+        self.start_button.setEnabled(state.start_enabled)
+        self.cancel_button.setEnabled(state.cancel_enabled)
         for widget in (
             self.input_selector,
             self.output_selector,
@@ -322,8 +328,8 @@ class NoiseInsertionPanel(QWidget):
             self.preview_interval,
             self.continue_on_error,
         ):
-            widget.setEnabled(not running)
-        self.seed.setEnabled(not running and self.use_seed.isChecked())
+            widget.setEnabled(state.inputs_enabled)
+        self.seed.setEnabled(state.inputs_enabled and self.use_seed.isChecked())
         self.max_workers.setEnabled(
-            not running and self.parallel_mode.currentData() != "sequential"
+            state.inputs_enabled and self.parallel_mode.currentData() != "sequential"
         )

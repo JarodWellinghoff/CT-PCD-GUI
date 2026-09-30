@@ -1,16 +1,31 @@
 from __future__ import annotations
 
 import threading
-from PySide6.QtCore import QObject, QThread, Signal, Slot
-from PySide6.QtWidgets import QMessageBox
-from ct_pcd_gui.shared.qt.task_runner import QtTaskRunner, TaskHandle
-from ..application.use_case import RunNoiseInsertion
-from ..infrastructure.executor import run_noise_job
-from ..application.models import NoiseJobConfig
+
+from PySide6.QtCore import QObject, Signal, Slot
+
+from ct_pcd_gui.shared.qt.task_runner import (
+    QtTaskRunner,
+    TaskCancelled,
+    TaskContext,
+    TaskHandle,
+)
+
 from ..application.errors import NoiseInsertionCancelled
+from ..application.models import (
+    JobLog,
+    JobProgress,
+    JobStarted,
+    JobSummary,
+    NoiseJobConfig,
+    PreviewPayload,
+)
+from ..application.ports import NoiseJobCallbacks
+from ..application.use_case import RunNoiseInsertion
+from ..application.validation import validate_config
 from .panel import NoiseInsertionPanel
+from .view_state import NoiseJobDraft, NoiseJobPhase, NoiseViewState
 from .workspace import NoiseInsertionWorkspace
-from .view_state import NoiseJobDraft
 
 
 class NoiseInsertionPresenter(QObject):
@@ -26,206 +41,195 @@ class NoiseInsertionPresenter(QObject):
         task_runner: QtTaskRunner,
         parent: QObject | None = None,
     ) -> None:
-        # The parent must be a persistent QObject or None.
         super().__init__(parent)
-
         self._panel = panel
         self._workspace = workspace
         self._use_case = use_case
         self._task_runner = task_runner
         self._task_handle: TaskHandle | None = None
+        self._generation = 0
+        self._cleaned = False
 
         panel.run_requested.connect(self.start)
         panel.cancel_requested.connect(self.cancel)
+        panel.validation_failed.connect(self._show_validation_error)
 
     @property
     def is_running(self) -> bool:
         return self._task_handle is not None and self._task_handle.is_running
 
     @Slot(object)
-    def start(self, draft: NoiseJobDraft) -> None:
-
-        if self.is_running:
+    def start(self, draft: object) -> None:
+        if self._task_handle is not None or self._cleaned:
+            return
+        if not isinstance(draft, NoiseJobDraft):
+            self._show_validation_error("The noise-insertion settings are invalid.")
             return
 
-        self._workspace.reset_for_job(draft.preview_interval)
-        self._panel.render_state(True)
+        config = _config_from_draft(draft)
+        try:
+            validate_config(config)
+        except (OSError, TypeError, ValueError) as exc:
+            self._show_validation_error(str(exc))
+            return
+
+        self._generation += 1
+        generation = self._generation
+
+        self._workspace.show_inspecting(config.preview_interval)
+        self._render_active(NoiseJobPhase.INSPECTING, cancel_enabled=True)
+        callbacks_connected = threading.Event()
+
+        def operation(context: TaskContext) -> JobSummary:
+            # QtTaskRunner starts its thread before returning the handle. Hold the
+            # operation until this presenter has connected every result signal so
+            # even an immediate backend failure reaches the UI.
+            callbacks_connected.wait()
+            callbacks = NoiseJobCallbacks(
+                log=lambda message: context.emit(JobLog(str(message))),
+                started=lambda total, files, frames: context.emit(
+                    JobStarted(int(total), int(files), int(frames))
+                ),
+                progress=lambda completed, total, status: context.emit(
+                    JobProgress(int(completed), int(total), str(status))
+                ),
+                preview=context.emit,
+            )
+            try:
+                summary = self._use_case.execute(
+                    config,
+                    cancel_event=context.cancel_event,
+                    callbacks=callbacks,
+                )
+            except NoiseInsertionCancelled as exc:
+                raise TaskCancelled(str(exc)) from exc
+
+            context.raise_if_cancelled()
+            return summary
+
+        try:
+            handle = self._task_runner.start(operation)
+        except Exception as exc:
+            message = str(exc) or type(exc).__name__
+            self._workspace.show_failed(message)
+            self._panel.render_state(NoiseViewState(phase=NoiseJobPhase.FAILED))
+            self.error_requested.emit("Noise Insertion", message)
+            return
+
+        self._task_handle = handle
         self.running_changed.emit(True)
 
-        self.thread = QThread(self)
-        self.worker = NoiseInsertionWorker(config)
-        self.worker.moveToThread(self.thread)
-
-        self.thread.started.connect(self.worker.run)
-        self.worker.jobStarted.connect(self.workspace.configure_progress)
-        self.worker.progressChanged.connect(self.workspace.set_progress)
-        self.worker.logMessage.connect(self.workspace.append_log)
-        self.worker.previewReady.connect(self.workspace.update_preview)
-        self.worker.completed.connect(self._completed)
-        self.worker.cancelled.connect(self._cancelled)
-        self.worker.failed.connect(self._failed)
-
-        self.worker.completed.connect(self.thread.quit)
-        self.worker.cancelled.connect(self.thread.quit)
-        self.worker.failed.connect(self.thread.quit)
-        self.thread.finished.connect(self._thread_finished)
-        self.thread.finished.connect(self.worker.deleteLater)
-        self.thread.finished.connect(self.thread.deleteLater)
-        self.thread.start()
-        try:
-            summary = run_noise_job(
-                self.config,
-                cancel_event=self.cancel_event,
-                log_callback=self.logMessage.emit,
-                started_callback=self.jobStarted.emit,
-                progress_callback=self.progressChanged.emit,
-                preview_callback=self.previewReady.emit,
-            )
-        except NoiseInsertionCancelled as exc:
-            self.cancelled.emit(str(exc))
-        except Exception as exc:
-            self.logMessage.emit(f"FATAL: {exc}")
-            self.failed.emit(str(exc))
-        else:
-            self.completed.emit(summary)
+        signals = handle.context.signals
+        signals.event.connect(lambda event, g=generation: self._handle_event(g, event))
+        signals.succeeded.connect(
+            lambda result, g=generation: self._completed(g, result)
+        )
+        signals.cancelled.connect(
+            lambda message, g=generation: self._cancelled(g, message)
+        )
+        signals.failed.connect(lambda message, g=generation: self._failed(g, message))
+        signals.finished.connect(lambda h=handle, g=generation: self._finished(g, h))
+        callbacks_connected.set()
 
     @Slot()
     def cancel(self) -> None:
-        if self._task_handle is not None:
-            self._task_handle.cancel()
+        handle = self._task_handle
+        if handle is None or not handle.is_running:
+            return
+
+        self._workspace.show_cancelling()
+        self._render_active(NoiseJobPhase.CANCELLING, cancel_enabled=False)
+        handle.cancel()
 
     def cleanup(self) -> None:
-        if self._task_handle is not None:
-            self._task_handle.cancel()
+        if self._cleaned:
+            return
+        self._cleaned = True
+        self.cancel()
 
+    def _handle_event(self, generation: int, event: object) -> None:
+        if generation != self._generation:
+            return
+        if isinstance(event, JobLog):
+            self._workspace.append_log(event.message)
+        elif isinstance(event, JobStarted):
+            self._workspace.show_started(event)
+            self._render_active(NoiseJobPhase.RUNNING, cancel_enabled=True)
+        elif isinstance(event, JobProgress):
+            self._workspace.show_progress(event)
+        elif isinstance(event, PreviewPayload):
+            self._workspace.update_preview(event)
 
-class NoiseInsertionWorker(QObject):
-    jobStarted = Signal(int, int, int)
-    progressChanged = Signal(int, int, str)
-    logMessage = Signal(str)
-    previewReady = Signal(object)
-    completed = Signal(object)
-    cancelled = Signal(str)
-    failed = Signal(str)
+    def _completed(self, generation: int, result: object) -> None:
+        if generation != self._generation:
+            return
+        if not isinstance(result, JobSummary):
+            self._failed(generation, "Noise insertion returned an invalid summary.")
+            return
 
-    def __init__(self, config: NoiseJobConfig) -> None:
-        super().__init__()
-        self.config = config
-        self.cancel_event = threading.Event()
+        self._workspace.show_completed(result)
+        self._render_active(NoiseJobPhase.COMPLETED, cancel_enabled=False)
 
-    def cancel(self) -> None:
-        self.cancel_event.set()
+    def _cancelled(self, generation: int, message: str) -> None:
+        if generation != self._generation:
+            return
+        self._workspace.show_cancelled(message)
+        self._render_active(NoiseJobPhase.CANCELLING, cancel_enabled=False)
 
-    @Slot()
-    def run(self) -> None:
-        try:
-            summary = run_noise_job(
-                self.config,
-                cancel_event=self.cancel_event,
-                log_callback=self.logMessage.emit,
-                started_callback=self.jobStarted.emit,
-                progress_callback=self.progressChanged.emit,
-                preview_callback=self.previewReady.emit,
-            )
-        except NoiseInsertionCancelled as exc:
-            self.cancelled.emit(str(exc))
-        except Exception as exc:
-            self.logMessage.emit(f"FATAL: {exc}")
-            self.failed.emit(str(exc))
-        else:
-            self.completed.emit(summary)
+    def _failed(self, generation: int, message: str) -> None:
+        if generation != self._generation:
+            return
+        friendly = _friendly_error(message)
+        self._workspace.show_failed(friendly)
+        self._render_active(NoiseJobPhase.FAILED, cancel_enabled=False)
+        self.error_requested.emit("Noise Insertion", friendly)
 
+    def _finished(self, generation: int, handle: TaskHandle) -> None:
+        if generation != self._generation or self._task_handle is not handle:
+            return
+        self._task_handle = None
+        self._panel.render_state(NoiseViewState())
+        self.running_changed.emit(False)
 
-class NoiseInsertionController(QObject):
-    """Own the QThread lifecycle and connect the module panel to its workspace."""
-
-    runningChanged = Signal(bool)
-
-    def __init__(
+    def _render_active(
         self,
-        panel: NoiseInsertionPanel,
-        workspace: NoiseInsertionWorkspace,
-        parent: QObject | None = None,
+        phase: NoiseJobPhase,
+        *,
+        cancel_enabled: bool,
     ) -> None:
-        super().__init__(parent)
-        self.panel = panel
-        self.workspace = workspace
-        self.thread: QThread | None = None
-        self.worker: NoiseInsertionWorker | None = None
-
-        panel.run_requested.connect(self.start)
-        panel.cancel_requested.connect(self.cancel)
-
-    @property
-    def is_running(self) -> bool:
-        return self.thread is not None and self.thread.isRunning()
-
-    @Slot(object)
-    def start(self, config: NoiseJobConfig) -> None:
-        if self.is_running:
-            return
-
-        self.workspace.reset_for_job(config.preview_interval)
-        self.panel.set_running(True)
-        self.runningChanged.emit(True)
-
-        self.thread = QThread(self)
-        self.worker = NoiseInsertionWorker(config)
-        self.worker.moveToThread(self.thread)
-
-        self.thread.started.connect(self.worker.run)
-        self.worker.jobStarted.connect(self.workspace.configure_progress)
-        self.worker.progressChanged.connect(self.workspace.set_progress)
-        self.worker.logMessage.connect(self.workspace.append_log)
-        self.worker.previewReady.connect(self.workspace.update_preview)
-        self.worker.completed.connect(self._completed)
-        self.worker.cancelled.connect(self._cancelled)
-        self.worker.failed.connect(self._failed)
-
-        self.worker.completed.connect(self.thread.quit)
-        self.worker.cancelled.connect(self.thread.quit)
-        self.worker.failed.connect(self.thread.quit)
-        self.thread.finished.connect(self._thread_finished)
-        self.thread.finished.connect(self.worker.deleteLater)
-        self.thread.finished.connect(self.thread.deleteLater)
-        self.thread.start()
-
-    @Slot()
-    def cancel(self) -> None:
-        if self.worker is None or not self.is_running:
-            return
-        self.workspace.append_log(
-            "Cancellation requested. Active frame/file tasks will stop at the next "
-            "safe boundary; a task already writing a DICOM will finish first."
-        )
-        self.workspace.progress_status.setText("Cancelling...")
-        self.panel.cancel_button.setEnabled(False)
-        self.worker.cancel()
-
-    @Slot(object)
-    def _completed(self, summary: JobSummary) -> None:
-        self.workspace.mark_finished(summary)
-        self.workspace.append_log(
-            f"Summary: {summary.written_files} output file(s), "
-            f"{summary.failed_files} failed, {summary.skipped_files} skipped, "
-            f"{summary.clipped_pixels:,} clipped pixel(s), maximum "
-            f"{summary.max_workers} parallel worker(s)."
+        self._panel.render_state(
+            NoiseViewState(
+                phase=phase,
+                inputs_enabled=False,
+                start_enabled=False,
+                cancel_enabled=cancel_enabled,
+            )
         )
 
     @Slot(str)
-    def _cancelled(self, message: str) -> None:
-        self.workspace.mark_cancelled()
-        self.workspace.append_log(message or "Noise insertion was cancelled.")
+    def _show_validation_error(self, message: str) -> None:
+        self.error_requested.emit("Noise Insertion", str(message))
 
-    @Slot(str)
-    def _failed(self, message: str) -> None:
-        self.workspace.mark_failed()
-        self.workspace.append_log(f"Job stopped: {message}")
-        QMessageBox.critical(self.panel, "Noise Insertion", message)
 
-    @Slot()
-    def _thread_finished(self) -> None:
-        self.panel.set_running(False)
-        self.runningChanged.emit(False)
-        self.worker = None
-        self.thread = None  # pyright: ignore[reportIncompatibleMethodOverride]
+def _config_from_draft(draft: NoiseJobDraft) -> NoiseJobConfig:
+    return NoiseJobConfig(
+        input_path=draft.input_path,
+        output_dir=draft.output_dir,
+        input_mode=draft.input_mode,
+        mas_factor=draft.mas_factor,
+        electronic_noise=draft.electronic_noise,
+        seed=draft.seed,
+        file_suffix=draft.file_suffix,
+        update_tube_current=draft.update_tube_current,
+        overwrite_existing=draft.overwrite_existing,
+        recursive=draft.recursive,
+        continue_on_error=draft.continue_on_error,
+        preview_interval=draft.preview_interval,
+        parallel_mode=draft.parallel_mode,
+        max_workers=draft.max_workers,
+    )
+
+
+def _friendly_error(message: str) -> str:
+    lines = [line.strip() for line in str(message).splitlines() if line.strip()]
+    return lines[-1] if lines else "Noise insertion failed for an unknown reason."
