@@ -217,6 +217,7 @@ def _config_from_draft(draft: NoiseJobDraft) -> NoiseJobConfig:
         output_dir=draft.output_dir,
         input_mode=draft.input_mode,
         mas_factor=draft.mas_factor,
+        fine_tune_factor=draft.fine_tune_factor,
         electronic_noise=draft.electronic_noise,
         seed=draft.seed,
         file_suffix=draft.file_suffix,

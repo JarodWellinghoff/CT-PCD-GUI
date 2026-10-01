@@ -61,6 +61,15 @@ def force_minmax_us(dataset: Dataset) -> None:
             element.VR = "US"
 
 
+def simulated_series_description(dataset: Dataset, mas_factor: float) -> str:
+    """Return the v2 simulated-dose series description for ``dataset``."""
+    old_description = str(getattr(dataset, "SeriesDescription", "PCD")).strip()
+    if "SIM" in old_description.upper():
+        return old_description
+    old_description = old_description.replace(" FD", "").strip()
+    return f"{old_description} SIM {int(round(mas_factor * 100.0))}pct"
+
+
 def set_uncompressed_output_transfer_syntax(dataset: Dataset) -> None:
     if not hasattr(dataset, "file_meta") or dataset.file_meta is None:
         dataset.file_meta = FileMetaDataset()
@@ -114,26 +123,64 @@ def new_output_identity(dataset: Dataset) -> None:
     set_uncompressed_output_transfer_syntax(dataset)
 
 
+def _restore_pixel_representation_layout(
+    dataset: Dataset,
+    had_pixel_representation: bool,
+    pixel_representation: int | None,
+) -> None:
+    if had_pixel_representation and pixel_representation is not None:
+        dataset.PixelRepresentation = pixel_representation
+    elif TAG_PIXEL_REPRESENTATION in dataset:
+        del dataset[TAG_PIXEL_REPRESENTATION]
+
+
 def prepare_single_frame_output(
     dataset: Dataset,
     encoded: np.ndarray,
     intercept: float,
     slope: float,
     mas_factor: float,
+    *,
+    series_description: str | None = None,
 ) -> Dataset:
+    had_pixel_representation = TAG_PIXEL_REPRESENTATION in dataset
+    pixel_representation = (
+        int(dataset[TAG_PIXEL_REPRESENTATION].value)
+        if had_pixel_representation
+        else None
+    )
+    had_root_smallest = TAG_SMALLEST in dataset
+    had_root_largest = TAG_LARGEST in dataset
+
     set_uncompressed_pixel_data(dataset, encoded)
     dataset.Rows, dataset.Columns = encoded.shape
     dataset.RescaleIntercept = intercept
     dataset.RescaleSlope = slope
-    dataset.PixelRepresentation = 0
+    _restore_pixel_representation_layout(
+        dataset,
+        had_pixel_representation,
+        pixel_representation,
+    )
 
     if TAG_SMALLEST in dataset:
         del dataset[TAG_SMALLEST]
     if TAG_LARGEST in dataset:
         del dataset[TAG_LARGEST]
-    dataset.add_new(TAG_SMALLEST, "US", int(encoded.min()))
-    dataset.add_new(TAG_LARGEST, "US", int(encoded.max()))
+    if had_root_smallest:
+        dataset.add_new(TAG_SMALLEST, "US", int(encoded.min()))
+    if had_root_largest:
+        dataset.add_new(TAG_LARGEST, "US", int(encoded.max()))
 
+    shared_description = (
+        series_description
+        if series_description is not None
+        else getattr(mas_factor, "series_description", None)
+    )
+    dataset.SeriesDescription = (
+        shared_description
+        if shared_description is not None
+        else simulated_series_description(dataset, mas_factor)
+    )
     update_tube_current(dataset, mas_factor)
     new_output_identity(dataset)
     force_minmax_us(dataset)
@@ -164,7 +211,16 @@ def prepare_multiframe_output(
     mas_factor: float,
     had_root_smallest: bool,
     had_root_largest: bool,
+    *,
+    series_description: str | None = None,
 ) -> Dataset:
+    had_pixel_representation = TAG_PIXEL_REPRESENTATION in dataset
+    pixel_representation = (
+        int(dataset[TAG_PIXEL_REPRESENTATION].value)
+        if had_pixel_representation
+        else None
+    )
+
     frame_count, rows, columns = encoded.shape
     dataset.NumberOfFrames = frame_count
     dataset.Rows = rows
@@ -172,7 +228,11 @@ def prepare_multiframe_output(
     set_uncompressed_pixel_data(dataset, encoded)
     dataset.RescaleIntercept = intercept
     dataset.RescaleSlope = slope
-    dataset.PixelRepresentation = 0
+    _restore_pixel_representation_layout(
+        dataset,
+        had_pixel_representation,
+        pixel_representation,
+    )
 
     if TAG_SMALLEST in dataset:
         del dataset[TAG_SMALLEST]
@@ -183,6 +243,16 @@ def prepare_multiframe_output(
     if had_root_largest:
         dataset.add_new(TAG_LARGEST, "US", int(encoded.max()))
 
+    shared_description = (
+        series_description
+        if series_description is not None
+        else getattr(mas_factor, "series_description", None)
+    )
+    dataset.SeriesDescription = (
+        shared_description
+        if shared_description is not None
+        else simulated_series_description(dataset, mas_factor)
+    )
     update_tube_current(dataset, mas_factor)
     new_output_identity(dataset)
     force_minmax_us(dataset)

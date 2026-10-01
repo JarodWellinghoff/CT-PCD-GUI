@@ -125,6 +125,19 @@ class NoiseInsertionPanel(QWidget):
         factor_layout.addWidget(self.dose_label, 1)
         settings_form.addRow("mAs factor:", factor_row)
 
+        self.fine_tune_factor = QDoubleSpinBox(self)
+        self.fine_tune_factor.setRange(0.000001, 1_000_000.0)
+        self.fine_tune_factor.setDecimals(6)
+        self.fine_tune_factor.setSingleStep(0.05)
+        self.fine_tune_factor.setValue(1.0)
+        self.fine_tune_factor.setKeyboardTracking(False)
+        self.fine_tune_factor.setToolTip(
+            "Calibration gain applied to detected low-dose counts: "
+            "N2 = N1 x mAs factor x fine-tune factor. It changes simulated noise "
+            "but not the nominal dose label or scaled tube current."
+        )
+        settings_form.addRow("Fine-tune factor:", self.fine_tune_factor)
+
         self.electronic_noise = QDoubleSpinBox(self)
         self.electronic_noise.setRange(0.0, 1.0e12)
         self.electronic_noise.setDecimals(6)
@@ -282,6 +295,7 @@ class NoiseInsertionPanel(QWidget):
             output_dir=output_dir,
             input_mode=str(self.input_mode.currentData()),
             mas_factor=float(self.mas_factor.value()),
+            fine_tune_factor=float(self.fine_tune_factor.value()),
             electronic_noise=float(self.electronic_noise.value()),
             seed=int(self.seed.value()) if self.use_seed.isChecked() else None,
             file_suffix=self.file_suffix.text(),
@@ -313,6 +327,7 @@ class NoiseInsertionPanel(QWidget):
             self.file_suffix,
             self.overwrite_existing,
             self.mas_factor,
+            self.fine_tune_factor,
             self.electronic_noise,
             self.use_seed,
             self.parallel_mode,

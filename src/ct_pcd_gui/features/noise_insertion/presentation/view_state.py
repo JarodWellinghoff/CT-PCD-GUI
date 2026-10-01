@@ -27,6 +27,7 @@ class NoiseJobDraft:
     preview_interval: int
     parallel_mode: str
     max_workers: int
+    fine_tune_factor: float = 1.0
 
 
 @dataclass(frozen=True, slots=True)
