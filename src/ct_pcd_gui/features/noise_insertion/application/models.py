@@ -42,7 +42,6 @@ class NoiseJobConfig:
     output_dir: str
     input_mode: str = "auto"
     mas_factor: float = 0.25
-    fine_tune_factor: float = 1.0
     electronic_noise: float = 0.0
     seed: int | None = 42
     file_suffix: str = "_noise"
@@ -52,6 +51,7 @@ class NoiseJobConfig:
     preview_interval: int = 100
     parallel_mode: str = "auto"
     max_workers: int = 0
+    fine_tune_factor: float = 1.0
 
     def __post_init__(self) -> None:
         inherited_description = getattr(
