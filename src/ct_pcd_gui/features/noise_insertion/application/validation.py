@@ -31,6 +31,9 @@ def validate_config(config: NoiseJobConfig) -> None:
     if not (0.0 < float(config.mas_factor) <= 1.0):
         raise ValueError("mAs factor must be greater than 0 and no greater than 1.")
 
+    if float(config.fine_tune_factor) <= 0.0:
+        raise ValueError("Fine-tune factor must be greater than 0.")
+
     if float(config.electronic_noise) < 0.0:
         raise ValueError("Electronic noise (Ne) cannot be negative.")
 

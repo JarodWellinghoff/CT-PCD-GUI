@@ -1,22 +1,25 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import replace
 
-from ..application.models import JobSummary, NoiseJobConfig
+from pydicom import dcmread
+
+from ..application.models import JobSummary, MasFactor, NoiseJobConfig
 from ..application.ports import CancellationFlag, NoiseJobCallbacks
 from . import executor
+from .dicom_io import simulated_series_description
 
 
 _RUN_LOCK = threading.Lock()
 
 
 class DefaultNoiseJobExecutor:
-    """Run the established backend with the job's real cancellation context.
+    """Run the established backend with v2-compatible job metadata.
 
-    The existing backend accidentally passes the ``CancellationFlag`` protocol
-    object to discovery instead of the event supplied by the task runner. This
-    adapter keeps the processing implementation intact while supplying the live
-    event.
+    Discovery is performed once with the live cancellation event. The resulting
+    work list is then reused by the established backend, and the first input
+    header supplies one shared v2 SeriesDescription for every output file.
     """
 
     def run(
@@ -28,19 +31,40 @@ class DefaultNoiseJobExecutor:
     ) -> JobSummary:
         with _RUN_LOCK:
             original_discover = executor.discover_work_items
+            items = original_discover(config, cancel_event, callbacks.log)
 
-            def discover_with_job_event(
-                discovery_config: NoiseJobConfig,
-                _incorrect_flag: object,
-                log_callback,
-            ):
-                return original_discover(
-                    discovery_config,
-                    cancel_event,
-                    log_callback,
+            if items:
+                first_dataset = dcmread(
+                    str(items[0].input_path),
+                    force=True,
+                    stop_before_pixels=True,
                 )
+                series_description = simulated_series_description(
+                    first_dataset,
+                    config.mas_factor,
+                )
+                config = replace(
+                    config,
+                    mas_factor=MasFactor(
+                        float(config.mas_factor),
+                        config.fine_tune_factor,
+                        series_description,
+                    ),
+                )
+                callbacks.log(
+                    "v2 calibration: "
+                    f"fine-tune factor={config.fine_tune_factor:.6g}."
+                )
+                callbacks.log(f"SeriesDescription: {series_description}")
 
-            executor.discover_work_items = discover_with_job_event
+            def reuse_discovered_items(
+                _config: NoiseJobConfig,
+                _incorrect_flag: object,
+                _log_callback,
+            ):
+                return items
+
+            executor.discover_work_items = reuse_discovered_items
             try:
                 return executor.run_noise_job(
                     config,

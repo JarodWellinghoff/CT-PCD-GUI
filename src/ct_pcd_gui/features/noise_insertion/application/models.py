@@ -6,6 +6,36 @@ from pathlib import Path
 import numpy as np
 
 
+class MasFactor(float):
+    """Float-compatible v2 dose factor carried through worker-process APIs.
+
+    The established executor passes the nominal mAs factor directly to the
+    numerical model and DICOM writer.  This value object preserves that numeric
+    interface while carrying the v2 fine-tune calibration and the job-wide
+    output series description through spawned process workers.
+    """
+
+    fine_tune_factor: float
+    series_description: str | None
+
+    def __new__(
+        cls,
+        value: float,
+        fine_tune_factor: float = 1.0,
+        series_description: str | None = None,
+    ) -> MasFactor:
+        instance = super().__new__(cls, value)
+        instance.fine_tune_factor = float(fine_tune_factor)
+        instance.series_description = series_description
+        return instance
+
+    def __reduce__(self):
+        return (
+            type(self),
+            (float(self), self.fine_tune_factor, self.series_description),
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class NoiseJobConfig:
     input_path: str
@@ -21,6 +51,23 @@ class NoiseJobConfig:
     preview_interval: int = 100
     parallel_mode: str = "auto"
     max_workers: int = 0
+    fine_tune_factor: float = 1.0
+
+    def __post_init__(self) -> None:
+        inherited_description = getattr(
+            self.mas_factor,
+            "series_description",
+            None,
+        )
+        object.__setattr__(
+            self,
+            "mas_factor",
+            MasFactor(
+                float(self.mas_factor),
+                self.fine_tune_factor,
+                inherited_description,
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
