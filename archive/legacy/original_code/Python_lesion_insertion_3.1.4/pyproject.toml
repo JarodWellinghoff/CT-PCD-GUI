@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dicom-ctpd-lesion-insertion"
+version = "3.1.4"
+description = "Pure-Python DICOM-CT-PD lesion insertion pipeline"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.12",
+  "pydicom>=3.0",
+  "pynrrd>=1.0",
+  "matplotlib>=3.8",
+  "PyQt6>=6.6",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+lesion-insertion = "lesion_pipeline.cli:main"
+lesion-insertion-gui = "lesion_pipeline.gui:main"
+
+[tool.setuptools]
+packages = ["lesion_pipeline"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

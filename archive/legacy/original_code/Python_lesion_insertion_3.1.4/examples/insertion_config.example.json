@@ -1,0 +1,21 @@
+{
+  "ctpd_input": "S:\\path\\to\\DICOM_CTPD",
+  "output_dir": "S:\\path\\to\\output\\dicom_ctpd_modified",
+  "t1_series_dir": "S:\\path\\to\\reconstructed_T1",
+  "patient_position": "HFS",
+  "spectrum_channel_map": {
+    "1": 0,
+    "2": 1
+  },
+  "workers": 4,
+  "overwrite": false,
+  "insertions": [
+    {
+      "label": "Placement 1",
+      "lesion_model": "S:\\path\\to\\lesion_models\\Lesion01.npz",
+      "center_pixel": [221.0, 296.0, 52.0],
+      "center_ctpd_mm": null,
+      "background_hu": [163.4, 130.3]
+    }
+  ]
+}
