@@ -3,14 +3,18 @@
 **Version:** 0.1.0  
 **Author:** Jarod Wellinghoff
 
-PySide6 research workbench for DICOM-CT-PD processing, lesion-model viewing, and interactive lesion insertion.
+PySide6 research workbench for DICOM-CT-PD processing, lesion extraction,
+lesion-model viewing, interactive lesion insertion, and noise insertion.
 
 ## Run
 
 ```bash
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,lesion-extraction]"
 ct-pcd-gui
 ```
+
+The `lesion-extraction` extra installs SimpleITK for DICOM/NRRD geometry,
+resampling, connected-component analysis, and lesion statistics.
 
 ## Development
 
@@ -20,4 +24,10 @@ ruff check .
 pyright
 ```
 
-See [Lesion insertion module](docs/lesion_insertion.md) for the workflow, coordinate conventions, output manifest, external reconstruction integration, limitations, and manual validation checklist.
+See [Lesion extraction module](docs/lesion_extraction.md) for the NRRD-to-NPZ
+workflow, connected-component review, multi-series behavior, file schema, and
+CLI usage.
+
+See [Lesion insertion module](docs/lesion_insertion.md) for the workflow,
+coordinate conventions, output manifest, external reconstruction integration,
+limitations, and manual validation checklist.
