@@ -74,7 +74,9 @@ def _series_coordinate(dataset: Any, normal: np.ndarray) -> float:
 
 def _orientation(dataset: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     if not hasattr(dataset, "ImageOrientationPatient"):
-        raise ValidationError("A reconstruction slice is missing ImageOrientationPatient.")
+        raise ValidationError(
+            "A reconstruction slice is missing ImageOrientationPatient."
+        )
     orientation = _float_vector(
         dataset.ImageOrientationPatient, length=6, name="ImageOrientationPatient"
     )
@@ -173,15 +175,11 @@ def _fallback_series_key(dataset: Any, path: Path, root: Path) -> str:
         str(getattr(dataset, "Rows", "")),
         str(getattr(dataset, "Columns", "")),
         _fingerprint_vector(getattr(dataset, "PixelSpacing", ())),
-        _fingerprint_vector(
-            getattr(dataset, "ImageOrientationPatient", ())
-        ),
+        _fingerprint_vector(getattr(dataset, "ImageOrientationPatient", ())),
         _relative_parent(path, root),
     )
     digest = hashlib.sha256(
-        "\x1f".join(components).encode(
-            "utf-8", errors="replace"
-        )
+        "\x1f".join(components).encode("utf-8", errors="replace")
     ).hexdigest()[:20]
     return f"{_SURROGATE_SERIES_PREFIX}{digest}"
 
@@ -238,11 +236,7 @@ def _group_reconstruction_headers(
             real_keys_by_fallback[fallback_key].add(source_uid)
 
     attached_missing_counts: dict[str, int] = defaultdict(int)
-    surrogate_keys = [
-        key
-        for key in groups
-        if key.startswith(_SURROGATE_SERIES_PREFIX)
-    ]
+    surrogate_keys = [key for key in groups if key.startswith(_SURROGATE_SERIES_PREFIX)]
     for surrogate_key in surrogate_keys:
         compatible = real_keys_by_fallback.get(surrogate_key, set())
         if len(compatible) != 1:
@@ -265,8 +259,8 @@ class PydicomLesionDicomService:
         source: str | Path,
         cancel_event: Event | None = None,
     ) -> list[DicomSeriesCandidate]:
-        groups, attached_missing_counts, errors = (
-            _group_reconstruction_headers(source, cancel_event)
+        groups, attached_missing_counts, errors = _group_reconstruction_headers(
+            source, cancel_event
         )
         candidates: list[DicomSeriesCandidate] = []
         for selection_key, records in groups.items():
@@ -280,8 +274,7 @@ class PydicomLesionDicomService:
             columns = int(first.Columns)
             warnings: list[str] = []
             missing_uid_count = sum(
-                not bool(_text(item, "SeriesInstanceUID"))
-                for _, item in records
+                not bool(_text(item, "SeriesInstanceUID")) for _, item in records
             )
             if selection_key.startswith(_SURROGATE_SERIES_PREFIX):
                 warnings.append(
@@ -297,53 +290,40 @@ class PydicomLesionDicomService:
                     "attached to this UID-bearing series because "
                     "exactly one metadata-compatible series was found."
                 )
-            sop_uids = [
-                _text(item, "SOPInstanceUID") for _, item in records
-            ]
+            sop_uids = [_text(item, "SOPInstanceUID") for _, item in records]
             populated = [value for value in sop_uids if value]
             if len(populated) != len(set(populated)):
                 warnings.append("Duplicate SOP Instance UIDs were found.")
             if any(
-                int(getattr(item, "NumberOfFrames", 1) or 1) > 1
-                for _, item in records
+                int(getattr(item, "NumberOfFrames", 1) or 1) > 1 for _, item in records
             ):
                 warnings.append(
                     "Enhanced/multi-frame reconstructed images are not "
                     "currently supported."
                 )
             if any(
-                int(item.Rows) != rows
-                or int(item.Columns) != columns
+                int(item.Rows) != rows or int(item.Columns) != columns
                 for _, item in records
             ):
-                warnings.append(
-                    "Image matrix dimensions vary within the series."
-                )
+                warnings.append("Image matrix dimensions vary within the series.")
             candidates.append(
                 DicomSeriesCandidate(
                     series_instance_uid=source_uid,
-                    study_instance_uid=_text(
-                        first, "StudyInstanceUID"
-                    ),
-                    frame_of_reference_uid=_text(
-                        first, "FrameOfReferenceUID"
-                    ),
+                    study_instance_uid=_text(first, "StudyInstanceUID"),
+                    frame_of_reference_uid=_text(first, "FrameOfReferenceUID"),
                     description=_text(first, "SeriesDescription"),
                     modality=_text(first, "Modality"),
                     instance_count=len(records),
                     rows=rows,
                     columns=columns,
-                    source_root=str(
-                        Path(source).expanduser().resolve()
-                    ),
+                    source_root=str(Path(source).expanduser().resolve()),
                     warnings=tuple(warnings),
                     selection_key=selection_key,
                     uses_surrogate_key=selection_key.startswith(
                         _SURROGATE_SERIES_PREFIX
                     ),
                     source_paths=tuple(
-                        str(path.expanduser().resolve())
-                        for path, _item in records
+                        str(path.expanduser().resolve()) for path, _item in records
                     ),
                     missing_uid_instance_count=missing_uid_count,
                 )
@@ -356,14 +336,9 @@ class PydicomLesionDicomService:
             )
         )
         if not candidates:
-            detail = (
-                f" ({errors} unreadable files skipped)"
-                if errors
-                else ""
-            )
+            detail = f" ({errors} unreadable files skipped)" if errors else ""
             raise ValidationError(
-                f"No reconstructed DICOM image series were found"
-                f"{detail}."
+                f"No reconstructed DICOM image series were found" f"{detail}."
             )
         return candidates
 
@@ -374,9 +349,7 @@ class PydicomLesionDicomService:
         cancel_event: Event | None,
     ) -> list[tuple[Path, Any]]:
         pydicom = _pydicom()
-        groups, _attached, _errors = (
-            _group_reconstruction_headers(source, cancel_event)
-        )
+        groups, _attached, _errors = _group_reconstruction_headers(source, cancel_event)
         header_records = groups.get(series_key, [])
         records: list[tuple[Path, Any]] = []
         for path, _header in header_records:
@@ -439,8 +412,7 @@ class PydicomLesionDicomService:
             )
         source_series_uid = next(iter(source_series_uids), "")
         missing_series_uid_count = sum(
-            not bool(_text(dataset, "SeriesInstanceUID"))
-            for _path, dataset in records
+            not bool(_text(dataset, "SeriesInstanceUID")) for _path, dataset in records
         )
         if missing_series_uid_count:
             if source_series_uid:
@@ -461,7 +433,9 @@ class PydicomLesionDicomService:
                 raise RuntimeError("Reconstruction loading was cancelled.")
             sop_uid = _text(dataset, "SOPInstanceUID")
             if sop_uid and sop_uid in seen_sop_uids:
-                raise ValidationError("Duplicate SOP Instance UIDs were found in the series.")
+                raise ValidationError(
+                    "Duplicate SOP Instance UIDs were found in the series."
+                )
             seen_sop_uids.add(sop_uid)
             if int(dataset.Rows) != rows or int(dataset.Columns) != columns:
                 raise ValidationError(
@@ -471,7 +445,9 @@ class PydicomLesionDicomService:
                 getattr(dataset, "PixelSpacing", None), length=2, name="PixelSpacing"
             )
             if not np.allclose(spacing, pixel_spacing, atol=1e-6):
-                raise ValidationError(f"PixelSpacing varies within the series: {path.name}")
+                raise ValidationError(
+                    f"PixelSpacing varies within the series: {path.name}"
+                )
             orientation = _float_vector(
                 getattr(dataset, "ImageOrientationPatient", None),
                 length=6,
@@ -491,7 +467,9 @@ class PydicomLesionDicomService:
                 "TransferSyntaxUID",
                 None,
             )
-            if transfer_syntax is not None and getattr(transfer_syntax, "is_compressed", False):
+            if transfer_syntax is not None and getattr(
+                transfer_syntax, "is_compressed", False
+            ):
                 warnings.append(
                     "The reconstruction uses compressed Pixel Data. Decoding depends on an "
                     "installed pydicom pixel-data handler."
@@ -514,11 +492,14 @@ class PydicomLesionDicomService:
             paths.append(str(path.resolve()))
 
         coordinates = np.asarray(
-            [np.dot(np.asarray(position), normal) for position in positions], dtype=float
+            [np.dot(np.asarray(position), normal) for position in positions],
+            dtype=float,
         )
         warnings.extend(_warning_for_spacing(coordinates))
         if len(set(paths)) != len(paths):
-            raise ValidationError("The same reconstruction file was included more than once.")
+            raise ValidationError(
+                "The same reconstruction file was included more than once."
+            )
 
         if not hasattr(first, "ReconstructionDiameter"):
             warnings.append(
@@ -573,9 +554,7 @@ class PydicomLesionDicomService:
             patient_identity_digest=_patient_digest(first),
             series_selection_key=series_key,
             series_grouping_method=_series_grouping_method(series_key),
-            series_missing_uid_instance_count=(
-                missing_series_uid_count
-            ),
+            series_missing_uid_instance_count=(missing_series_uid_count),
         )
         volume = DicomVolume(
             geometry=geometry,
@@ -595,8 +574,7 @@ class PydicomLesionDicomService:
         pydicom = _pydicom()
         records = discover_projection_records(source)
         missing_series_uid_count = sum(
-            not str(record.series_instance_uid).strip()
-            for record in records
+            not str(record.series_instance_uid).strip() for record in records
         )
         if missing_series_uid_count:
             raise ValidationError(
@@ -719,7 +697,9 @@ class PydicomLesionDicomService:
                     "PatientPosition differs between reconstruction and CTPD data.",
                 )
             )
-        if not matched_identifier and not any(issue.severity == "error" for issue in issues):
+        if not matched_identifier and not any(
+            issue.severity == "error" for issue in issues
+        ):
             issues.append(
                 ValidationIssue(
                     "error",
@@ -749,5 +729,7 @@ def local_background_hu(
     values = volume.hu[z, y0:y1, x0:x1]
     finite = values[np.isfinite(values)]
     if finite.size == 0:
-        raise ValidationError("The selected background region contains no finite pixels.")
+        raise ValidationError(
+            "The selected background region contains no finite pixels."
+        )
     return float(np.mean(finite))
