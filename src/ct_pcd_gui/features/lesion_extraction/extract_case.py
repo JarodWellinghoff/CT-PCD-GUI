@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from .components import split_segments
-from .exporter import crop_volume_with_padding, export_lesions, legacy_padded_bbox
+from .exporter import (
+    crop_volume_with_padding,
+    export_lesions,
+    legacy_padded_bbox,
+    validate_aligned_series_geometry,
+)
 from .preview import load_candidate_preview, load_segment_preview
 from .readers import (
     discover_dicom_series,
@@ -25,4 +30,5 @@ __all__ = [
     "require_nrrd",
     "require_sitk",
     "split_segments",
+    "validate_aligned_series_geometry",
 ]

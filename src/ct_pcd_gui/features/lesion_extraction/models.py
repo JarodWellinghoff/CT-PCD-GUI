@@ -128,9 +128,15 @@ class ExtractionProgress:
 
 @dataclass(frozen=True, slots=True)
 class ExportedLesion:
-    series_name: str
     candidate_id: str
     output_path: Path
+    series_names: tuple[str, ...]
+
+    @property
+    def series_name(self) -> str:
+        """Human-readable summary retained for the existing GUI log."""
+
+        return ", ".join(self.series_names)
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +169,11 @@ class LesionNpzRecord:
     lesion_variance: float
     lesion_voxel_count: int
     lesion_physical_size: float
+    series_names: tuple[str, ...] = ()
+    series_uids: tuple[str, ...] = ()
+    series_source_paths: tuple[str, ...] = ()
+    dicom_headers: tuple[Mapping[str, Any], ...] = ()
+    reference_series_index: int = 0
 
 
 _INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')

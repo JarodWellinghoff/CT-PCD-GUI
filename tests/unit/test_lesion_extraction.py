@@ -10,6 +10,7 @@ from ct_pcd_gui.features.lesion_extraction.extract_case import (
     crop_volume_with_padding,
     legacy_padded_bbox,
     parse_segment_definitions,
+    validate_aligned_series_geometry,
 )
 from ct_pcd_gui.features.lesion_extraction.models import (
     InputValidationError,
@@ -19,6 +20,7 @@ from ct_pcd_gui.features.lesion_extraction.models import (
     sanitize_output_name,
 )
 from ct_pcd_gui.features.lesion_extraction.writers import (
+    MULTI_SERIES_NPZ_FIELDS,
     NPZ_FIELDS,
     record_arrays,
     write_lesion_npz,
@@ -51,24 +53,63 @@ REFERENCE_FIELDS = (
 )
 
 
-def _record() -> LesionNpzRecord:
-    voi = np.arange(5 * 7 * 3, dtype=np.int16).reshape(5, 7, 3)
-    mask = np.zeros_like(voi, dtype=bool)
-    mask[1:4, 2:5, 1] = True
-    return LesionNpzRecord(
-        patient_name="L005-1-Lesion",
-        lesion_number=0,
-        org_case_path="C:/case",
-        org_mask="C:/case/segments.seg.nrrd",
-        org_dcm_path="C:/case",
-        dicom_header={
+class _ImageGeometry:
+    def __init__(
+        self,
+        *,
+        size=(16, 12, 8),
+        spacing=(0.7, 0.7, 1.0),
+        origin=(0.0, 0.0, 0.0),
+        direction=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+    ) -> None:
+        self._size = size
+        self._spacing = spacing
+        self._origin = origin
+        self._direction = direction
+
+    def GetSize(self):
+        return self._size
+
+    def GetSpacing(self):
+        return self._spacing
+
+    def GetOrigin(self):
+        return self._origin
+
+    def GetDirection(self):
+        return self._direction
+
+
+def _record(channel_count: int = 1) -> LesionNpzRecord:
+    base_voi = np.arange(5 * 7 * 3, dtype=np.int16).reshape(5, 7, 3)
+    base_mask = np.zeros_like(base_voi, dtype=bool)
+    base_mask[1:4, 2:5, 1] = True
+    if channel_count == 1:
+        voi = base_voi
+        mask = base_mask
+    else:
+        voi = np.stack(
+            [base_voi + 100 * index for index in range(channel_count)], axis=-1
+        )
+        mask = np.repeat(base_mask[..., np.newaxis], channel_count, axis=3)
+    headers = tuple(
+        {
             "Rows": "512",
             "Columns": "512",
             "PixelSpacing": ["0.7", "0.7"],
             "SliceThickness": "1.0",
             "ReconstructionDiameter": "358.4",
-            "KVP": "120",
-        },
+            "KVP": str(80 + 20 * index),
+        }
+        for index in range(channel_count)
+    )
+    return LesionNpzRecord(
+        patient_name="L005-1-Lesion",
+        lesion_number=0,
+        org_case_path="C:/case/series-1",
+        org_mask="C:/case/segments.seg.nrrd",
+        org_dcm_path="C:/case/series-1",
+        dicom_header=headers[0],
         lesion_mask=mask,
         voi=voi,
         org_slice_rng=np.asarray([20, 22]),
@@ -83,8 +124,18 @@ def _record() -> LesionNpzRecord:
         lesion_median_hu=40.0,
         lesion_sigma=8.0,
         lesion_variance=64.0,
-        lesion_voxel_count=int(mask.sum()),
+        lesion_voxel_count=int(base_mask.sum()),
         lesion_physical_size=18.0,
+        series_names=tuple(
+            f"Series {index + 1}" for index in range(channel_count)
+        ),
+        series_uids=tuple(
+            f"1.2.840.10008.{index + 1}" for index in range(channel_count)
+        ),
+        series_source_paths=tuple(
+            f"C:/case/series-{index + 1}" for index in range(channel_count)
+        ),
+        dicom_headers=headers,
     )
 
 
@@ -121,6 +172,46 @@ def test_writer_emits_reference_dtypes_without_pickle(tmp_path: Path) -> None:
         assert data["LesionCenter"].shape == (3,)
         assert data["LesionDiameter"].dtype == np.dtype(np.float64)
         assert json.loads(str(data["DicomHeaderJSON"]))["Columns"] == "512"
+
+
+def test_multi_series_writer_stores_all_series_as_channels(tmp_path: Path) -> None:
+    output = write_lesion_npz(_record(2), tmp_path / "lesion.npz")
+    with np.load(output, allow_pickle=False) as data:
+        assert tuple(data.files) == REFERENCE_FIELDS + MULTI_SERIES_NPZ_FIELDS
+        assert data["VOI"].shape == data["LesionMask"].shape == (5, 7, 3, 2)
+        assert data["VOI"].dtype == np.dtype(np.int16)
+        assert data["LesionMask"].dtype == np.dtype(bool)
+        assert int(data["SeriesCount"]) == 2
+        assert int(data["ReferenceSeriesIndex"]) == 0
+        assert data["SeriesNames"].tolist() == ["Series 1", "Series 2"]
+        assert data["SeriesUIDs"].tolist() == [
+            "1.2.840.10008.1",
+            "1.2.840.10008.2",
+        ]
+        assert len(data["DicomHeadersJSON"]) == 2
+        assert json.loads(str(data["DicomHeadersJSON"][1]))["KVP"] == "100"
+        expected_means = [
+            np.mean(data["VOI"][..., channel][data["LesionMask"][..., channel]])
+            for channel in range(2)
+        ]
+        assert np.allclose(data["LesionMeanHUByChannel"], expected_means)
+
+
+def test_multi_series_writer_repeats_shared_3d_mask() -> None:
+    record = _record(2)
+    record.lesion_mask = record.lesion_mask[..., 0]
+    arrays = record_arrays(record)
+    assert arrays["LesionMask"].shape == arrays["VOI"].shape
+    assert np.array_equal(
+        arrays["LesionMask"][..., 0], arrays["LesionMask"][..., 1]
+    )
+
+
+def test_multi_series_writer_requires_metadata_for_each_channel() -> None:
+    record = _record(2)
+    record.series_names = ("only one",)
+    with pytest.raises(InputValidationError, match="series_names"):
+        record_arrays(record)
 
 
 def test_reference_padding_reproduces_attached_volume_shape() -> None:
@@ -189,3 +280,20 @@ def test_writer_rejects_mask_without_background() -> None:
     record.lesion_mask[:] = True
     with pytest.raises(InputValidationError, match="fills the entire VOI"):
         record_arrays(record)
+
+
+def test_multi_series_geometry_must_be_voxel_aligned() -> None:
+    reference = _ImageGeometry()
+    validate_aligned_series_geometry(
+        reference,
+        _ImageGeometry(origin=(0.0005, 0.0, 0.0)),
+        reference_name="T1",
+        candidate_name="T2",
+    )
+    with pytest.raises(InputValidationError, match="not aligned"):
+        validate_aligned_series_geometry(
+            reference,
+            _ImageGeometry(spacing=(0.8, 0.7, 1.0)),
+            reference_name="T1",
+            candidate_name="T2",
+        )
