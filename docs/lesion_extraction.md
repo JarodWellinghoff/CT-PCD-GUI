@@ -21,29 +21,57 @@ overlay opacity, zooming with Ctrl+wheel, panning, and component selection.
 
 ## Multiple series
 
-For one series, lesion files are written directly to the selected output folder.
-For multiple series, the accepted components are resampled with nearest-neighbor
-interpolation and written once per series in separate series subfolders. The NRRD
-and DICOM data must share a valid physical coordinate system; the module does not
-perform image registration.
+The module writes exactly one `.npz` file for each included lesion, regardless of
+the number of input series. Input series order defines channel order. For multiple
+series, `VOI` and `LesionMask` use shape `(row, column, slice, series)` and each
+channel contains the data from the corresponding DICOM series.
+
+The first input series is the reference series for lesion geometry, ranges,
+spacing, and the legacy scalar DICOM header fields. Additional arrays record the
+ordered series names, UIDs, source paths, DICOM headers, and channel-specific HU
+statistics.
+
+All input series must already be voxel-for-voxel aligned: size, spacing, origin,
+and direction must match within numerical tolerance. The exporter validates this
+before writing any lesion files. It does not register or interpolate DICOM series.
+The NRRD segmentation is resampled to the reference series with nearest-neighbor
+interpolation.
 
 ## NPZ format
 
-The export matches the reference `L005-1-Lesion.npz` field layout. `VOI` is a
-signed 16-bit array and `LesionMask` is boolean; both use row/column/slice order
-(`y, x, z`). DICOM ranges and `LesionCenter` use DICOM index order (`x, y, z`).
-The archive contains no object arrays and loads with
-`numpy.load(path, allow_pickle=False)`.
+For one input series, the export retains the exact 22-field layout of the
+reference `L005-1-Lesion.npz`. `VOI` is a signed 16-bit array and `LesionMask` is
+boolean; both use row/column/slice order (`y, x, z`). DICOM ranges and
+`LesionCenter` use DICOM index order (`x, y, z`).
 
-The crop uses the legacy half-lesion-size padding rule with a minimum one-voxel
-margin. The file also includes DICOM header JSON, lesion geometry, HU statistics,
-voxel count, and physical volume.
+For multiple series, the same 22 fields remain first and the following fields are
+appended:
+
+- `SeriesCount`
+- `ReferenceSeriesIndex`
+- `SeriesNames`
+- `SeriesUIDs`
+- `SeriesSourcePaths`
+- `DicomHeadersJSON`
+- `LesionMeanHUByChannel`
+- `LesionMaxHUByChannel`
+- `LesionMinHUByChannel`
+- `LesionMedianHUByChannel`
+- `LesionSigmaByChannel`
+- `LesionVarianceByChannel`
+
+The archive contains no object arrays and loads with
+`numpy.load(path, allow_pickle=False)`. The crop uses the legacy half-lesion-size
+padding rule with a minimum one-voxel margin. Geometry, voxel count, and physical
+volume are shared across channels because aligned series represent the same
+lesion voxels.
 
 ## Command line
 
 ```bash
 ct-pcd-extract-lesions \
-  --dicom /path/to/series \
+  --dicom /path/to/series-a \
+  --dicom /path/to/series-b \
   --segmentation /path/to/segments.seg.nrrd \
   --output /path/to/models \
   --segment Segment0 \

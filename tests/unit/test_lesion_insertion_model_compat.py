@@ -71,6 +71,52 @@ def test_loads_new_voi_lesion_mask_npz_format(tmp_path: Path) -> None:
     assert model.source_path == str(path)
 
 
+def test_loads_combined_multi_series_lesion_npz(tmp_path: Path) -> None:
+    path = tmp_path / "combined-lesion.npz"
+    first = np.asarray(
+        [
+            [[10, 20], [30, 40]],
+            [[50, 60], [70, 80]],
+        ],
+        dtype=np.int16,
+    )
+    second = first + 100
+    voi = np.stack((first, second), axis=-1)
+    mask_3d = np.zeros(first.shape, dtype=bool)
+    mask_3d[0, 1, 1] = True
+    mask_3d[1, 1, 1] = True
+    mask = np.repeat(mask_3d[..., np.newaxis], 2, axis=3)
+    header = {
+        "Rows": 512,
+        "Columns": 512,
+        "PixelSpacing": [0.7, 0.8],
+        "SliceThickness": 2.5,
+        "ReconstructionDiameter": 409.6,
+        "KVP": 80.0,
+    }
+    np.savez_compressed(
+        path,
+        PatientName=np.asarray("synthetic-lesion"),
+        LesionNumber=np.asarray(7),
+        DicomHeaderJSON=np.asarray(json.dumps(header)),
+        LesionMask=mask,
+        VOI=voi,
+        LesionMeanHU=np.asarray(110.0),
+        SeriesCount=np.asarray(2),
+        SeriesNames=np.asarray(["80 kVp", "140 kVp"]),
+    )
+
+    model = load_lesion_model(path)
+
+    assert model.lesion_number == 7
+    assert model.channel_count == 2
+    assert model.voi_hu.shape == (2, 2, 2, 2)
+    assert model.mask.shape == model.voi_hu.shape
+    assert np.allclose(model.lesion_mean_hu_by_channel, [60.0, 160.0])
+    assert np.allclose(model.old_background_hu, [40.0, 140.0])
+    assert model.old_background_voxel_count == 6
+
+
 def test_existing_pipeline_npz_format_still_loads(tmp_path: Path) -> None:
     path = tmp_path / "legacy-pipeline-lesion.npz"
     voi = np.asarray([[[[25.0]]]], dtype=np.float32)
