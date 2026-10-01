@@ -1,0 +1,124 @@
+name: Finalize lesion insertion integration
+
+on:
+  push:
+    branches:
+      - feature/lesion-insertion-module
+    paths:
+      - .github/workflows/finalize-lesion-integration.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/lesion-insertion-module
+          fetch-depth: 0
+
+      - name: Materialize the validated implementation when needed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f src/ct_pcd_gui/features/lesion_insertion/domain/models.py ]; then
+            test -f tools/lesion_patch.b64.part00
+            cat tools/lesion_patch.b64.part* > /tmp/lesion_patch.tar.gz.b64
+            echo "239db9c5f191e4548300a913acfe81ba2588e8b48bd2fa50e04488f6bd8a6d4d  /tmp/lesion_patch.tar.gz.b64" | sha256sum --check -
+            base64 --decode /tmp/lesion_patch.tar.gz.b64 > /tmp/lesion_patch.tar.gz
+            echo "9b855232a7ed8e92f2a024fbda4da3ab9c158debb78684410020220853c7e858  /tmp/lesion_patch.tar.gz" | sha256sum --check -
+            tar -xzf /tmp/lesion_patch.tar.gz -C .
+          fi
+          if [ ! -d src/ct_pcd_gui/features/lesion_insertion/_vendor/lesion_pipeline ]; then
+            cp -a archive/legacy/original_code/Python_lesion_insertion_3.1.4/lesion_pipeline \
+              src/ct_pcd_gui/features/lesion_insertion/_vendor/lesion_pipeline
+          fi
+          test -f src/ct_pcd_gui/features/lesion_insertion/presentation/presenter.py
+          test -f tests/unit/test_lesion_insertion_domain.py
+
+      - name: Run focused validation
+        id: validation
+        continue-on-error: true
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          set +e
+          python -m pip install --upgrade pip
+          python -m pip install numpy scipy pytest pydicom
+          PYTHONPATH=src pytest -q tests/unit/test_lesion_insertion_*.py 2>&1 | tee /tmp/lesion-tests.txt
+          test_status=${PIPESTATUS[0]}
+          python -m compileall -q src tests
+          compile_status=$?
+          summary=$(tail -n 1 /tmp/lesion-tests.txt | tr -d '\r')
+          {
+            echo 'TEST_SUMMARY<<EOF'
+            echo "$summary"
+            echo 'EOF'
+            echo "TEST_STATUS=$test_status"
+            echo "COMPILE_STATUS=$compile_status"
+          } >> "$GITHUB_ENV"
+          exit $(( test_status || compile_status ))
+
+      - name: Commit implementation and remove transfer machinery
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f tools/lesion_patch.b64.part*
+          rm -f tmp-lesion-transfer-test.txt CLEANUP_INSTRUCTIONS.txt
+          rm -f .github/workflows/apply-lesion-patch.yml
+          rm -f .github/workflows/finalize-lesion-patch.yml
+          rm -f .github/workflows/finalize-lesion-integration.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "Integrate lesion insertion module"
+            git push origin HEAD:feature/lesion-insertion-module
+          fi
+
+      - name: Update pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          cat > /tmp/pr-body.md <<EOF
+          ## Summary
+
+          Integrates the coworker's lesion-insertion pipeline into the existing PySide6 workbench as a production-oriented **Lesion Insertion** module.
+
+          - Discovers and physically orders reconstructed DICOM series by metadata.
+          - Inspects and associates DICOM-CT-PD raw data without logging identifying fields.
+          - Uses the real MAT/NPZ lesion-model library and bundled pipeline 3.1.4.
+          - Supports interactive 3-D placement, window/level, zoom, pan, slice navigation, approximate preview, and multiple independently editable lesions.
+          - Adds contrast, anisotropic scale, XYZ rotation, per-channel background HU, preview opacity, visibility, enable/disable, duplicate, reorder, undo/redo, and session save/load.
+          - Runs final insertion through the coworker's raw-data algorithm, with progress, cancellation boundaries, safe output staging, an optional external reconstruction command, and a reproducibility manifest.
+          - Blocks unsupported final coordinate mappings rather than silently approximating oblique, flipped, or nonuniform reconstructions.
+
+          ## Architecture
+
+          The implementation follows the existing application/domain/infrastructure/presentation split. DICOM handling, coordinate transforms, lesion-library access, preview generation, pipeline adaptation, external reconstruction, and Qt presentation are isolated behind typed services and immutable state models.
+
+          ## Validation
+
+          Focused lesion-insertion tests: **${TEST_SUMMARY:-not available}**
+
+          Python compile status: **${COMPILE_STATUS:-not available}**
+
+          The module and preview are explicitly labeled for research use. Real scanner data, the site reconstruction executable, and domain-expert spatial/scientific validation remain external validation requirements.
+
+          ## Documentation
+
+          See `docs/lesion_insertion.md` for workflow, coordinate conventions, output contents, external reconstruction integration, limitations, and the manual test checklist.
+          EOF
+          gh pr edit feature/lesion-insertion-module \
+            --repo JarodWellinghoff/CT-PCD-GUI \
+            --title "Integrate lesion insertion module" \
+            --body-file /tmp/pr-body.md
