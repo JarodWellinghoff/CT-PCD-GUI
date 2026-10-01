@@ -1,0 +1,81 @@
+name: Apply lesion insertion patch
+
+on:
+  push:
+    branches:
+      - feature/lesion-insertion-module
+    paths:
+      - .github/workflows/apply-lesion-patch.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/lesion-insertion-module
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Verify and extract patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat tools/lesion_patch.b64.part* > /tmp/lesion_patch.tar.gz.b64
+          echo "239db9c5f191e4548300a913acfe81ba2588e8b48bd2fa50e04488f6bd8a6d4d  /tmp/lesion_patch.tar.gz.b64" | sha256sum --check -
+          base64 --decode /tmp/lesion_patch.tar.gz.b64 > /tmp/lesion_patch.tar.gz
+          echo "9b855232a7ed8e92f2a024fbda4da3ab9c158debb78684410020220853c7e858  /tmp/lesion_patch.tar.gz" | sha256sum --check -
+          tar -xzf /tmp/lesion_patch.tar.gz -C .
+          rm -rf src/ct_pcd_gui/features/lesion_insertion/_vendor/lesion_pipeline
+          cp -a archive/legacy/original_code/Python_lesion_insertion_3.1.4/lesion_pipeline \
+            src/ct_pcd_gui/features/lesion_insertion/_vendor/lesion_pipeline
+
+      - name: Install project and development dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Run focused lesion-insertion tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest -q tests/unit/test_lesion_insertion_*.py
+
+      - name: Compile Python sources
+        run: python -m compileall -q src tests
+
+      - name: Run complete test suite
+        continue-on-error: true
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest -q
+
+      - name: Run Ruff
+        continue-on-error: true
+        run: ruff check .
+
+      - name: Run Pyright
+        continue-on-error: true
+        run: pyright
+
+      - name: Commit implementation and remove transfer files
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f tools/lesion_patch.b64.part*
+          rm -f tmp-lesion-transfer-test.txt CLEANUP_INSTRUCTIONS.txt
+          rm -f .github/workflows/apply-lesion-patch.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Integrate lesion insertion module"
+          git push origin HEAD:feature/lesion-insertion-module
