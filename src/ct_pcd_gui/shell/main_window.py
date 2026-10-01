@@ -96,6 +96,11 @@ class MainWindow(QMainWindow):
         """Install all feature widgets after the shell widgets exist."""
 
         self.module_combo.clear()
+        # Keep the existing Slicer-like LayoutManager reachable.
+        # self.module_combo.addItem(
+        #     "Viewer",
+        #     self._VIEWER_MODULE_ID,
+        # )
 
         for descriptor in self._descriptors:
             self.central_stack.addWidget(descriptor.workspace)
@@ -109,12 +114,6 @@ class MainWindow(QMainWindow):
                 descriptor.display_name,
                 descriptor.module_id,
             )
-
-        # Keep the existing Slicer-like LayoutManager reachable.
-        self.module_combo.addItem(
-            "Viewer",
-            self._VIEWER_MODULE_ID,
-        )
 
     # ------------------------------------------------------------------
     # Toolbars

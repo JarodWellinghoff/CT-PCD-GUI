@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -103,7 +105,9 @@ class PathRow(QWidget):
     def _browse(self) -> None:
         current = self.path() or str(Path.home())
         if self.directory:
-            selected = QFileDialog.getExistingDirectory(self, "Select directory", current)
+            selected = QFileDialog.getExistingDirectory(
+                self, "Select directory", current
+            )
         else:
             selected, _ = QFileDialog.getOpenFileName(self, "Select file", current)
         if selected:
@@ -193,7 +197,9 @@ class LesionInsertionPanel(QWidget):
             action_text="Scan",
         )
         self.library_row.action_requested.connect(self.library_requested)
-        self.library_row.changed.connect(lambda _text: self.session_fields_changed.emit())
+        self.library_row.changed.connect(
+            lambda _text: self.session_fields_changed.emit()
+        )
         library_layout.addWidget(self.library_row)
         self.library_search = QLineEdit()
         self.library_search.setPlaceholderText("Search lesions")
@@ -253,6 +259,14 @@ class LesionInsertionPanel(QWidget):
         self.lesion_table.itemSelectionChanged.connect(self._lesion_selection_changed)
         self.lesion_table.itemChanged.connect(self._lesion_item_changed)
         self.lesion_table.verticalHeader().setVisible(False)
+
+        self.lesion_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+
+        self.lesion_table.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         lesions_layout.addWidget(self.lesion_table)
         layout.addWidget(lesions_group)
 
@@ -317,7 +331,9 @@ class LesionInsertionPanel(QWidget):
             action_text="Select",
         )
         self.output_row.action.setVisible(False)
-        self.output_row.changed.connect(lambda _text: self.session_fields_changed.emit())
+        self.output_row.changed.connect(
+            lambda _text: self.session_fields_changed.emit()
+        )
         output_layout.addRow("Output", self.output_row)
         self.spectrum_map = QLineEdit('{"1": 0, "2": 1}')
         self.spectrum_map.setToolTip(
@@ -447,9 +463,7 @@ class LesionInsertionPanel(QWidget):
             self.series_combo.clear()
             for index, candidate in enumerate(values):
                 selection_key = candidate.effective_selection_key
-                self.series_combo.addItem(
-                    candidate.display_name, selection_key
-                )
+                self.series_combo.addItem(candidate.display_name, selection_key)
                 if selection_key == selected_uid:
                     selected_index = index
             self.series_combo.setEnabled(bool(values))
@@ -491,7 +505,9 @@ class LesionInsertionPanel(QWidget):
                 if value.path == current_path:
                     selected_row = self.library_list.count() - 1
             if self.library_list.count():
-                self.library_list.setCurrentRow(selected_row if selected_row >= 0 else 0)
+                self.library_list.setCurrentRow(
+                    selected_row if selected_row >= 0 else 0
+                )
         self._library_row_changed(self.library_list.currentRow())
 
     @Slot(int)
@@ -613,7 +629,9 @@ class LesionInsertionPanel(QWidget):
             self.row_spin.setValue(lesion.center_voxel_crs[1])
             self.slice_spin.setValue(lesion.center_voxel_crs[2])
             self.contrast_spin.setValue(lesion.parameters.contrast_scale)
-            for spin, value in zip(self.scale_spins, lesion.parameters.scale_xyz, strict=True):
+            for spin, value in zip(
+                self.scale_spins, lesion.parameters.scale_xyz, strict=True
+            ):
                 spin.setValue(value)
             for spin, value in zip(
                 self.rotation_spins, lesion.parameters.rotation_deg_xyz, strict=True
