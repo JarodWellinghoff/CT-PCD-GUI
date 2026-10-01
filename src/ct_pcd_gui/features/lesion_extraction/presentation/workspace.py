@@ -9,10 +9,8 @@ from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QSlider,
     QSplitter,
     QTreeWidget,
@@ -20,6 +18,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from ct_pcd_gui.shared.qt.dicom_viewer import DicomSliceViewer, window_hu_to_uint8
 
 from ..models import OverlayEntry, SeriesPreview
 from .image_view import OverlayImageView
@@ -43,40 +43,36 @@ class LesionExtractionWorkspace(QWidget):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
-        toolbar = QHBoxLayout()
-        toolbar.addWidget(QLabel("Series:"))
+        root.setSpacing(6)
+
+        series_row = QHBoxLayout()
+        series_row.addWidget(QLabel("Series:"))
         self.series_combo = QComboBox(self)
         self.series_combo.setMinimumWidth(260)
-        toolbar.addWidget(self.series_combo, 1)
-        self.show_overlay = QCheckBox("Show overlay", self)
+        series_row.addWidget(self.series_combo, 1)
+        root.addLayout(series_row)
+
+        self.image_view = OverlayImageView()
+        self.image_view.setMinimumSize(480, 420)
+        self.viewer = DicomSliceViewer(self, image_view=self.image_view)
+        self.viewer.add_toolbar_separator()
+        self.show_overlay = QCheckBox("Show overlay", self.viewer.toolbar)
         self.show_overlay.setChecked(True)
-        toolbar.addWidget(self.show_overlay)
-        toolbar.addWidget(QLabel("Opacity:"))
-        self.opacity = QSlider(Qt.Orientation.Horizontal, self)
+        self.viewer.add_toolbar_widget(self.show_overlay)
+        self.viewer.add_toolbar_widget(QLabel("Opacity:", self.viewer.toolbar))
+        self.opacity = QSlider(Qt.Orientation.Horizontal, self.viewer.toolbar)
         self.opacity.setRange(0, 100)
         self.opacity.setValue(45)
         self.opacity.setFixedWidth(110)
-        toolbar.addWidget(self.opacity)
-        toolbar.addWidget(QLabel("Center:"))
-        self.center = QDoubleSpinBox(self)
-        self.center.setRange(-32768, 65535)
-        self.center.setDecimals(0)
-        self.center.setKeyboardTracking(False)
-        toolbar.addWidget(self.center)
-        toolbar.addWidget(QLabel("Width:"))
-        self.width = QDoubleSpinBox(self)
-        self.width.setRange(1, 131070)
-        self.width.setDecimals(0)
-        self.width.setKeyboardTracking(False)
-        toolbar.addWidget(self.width)
-        self.fit_button = QPushButton("Fit", self)
-        toolbar.addWidget(self.fit_button)
-        root.addLayout(toolbar)
+        self.viewer.add_toolbar_widget(self.opacity)
+
+        # Compatibility aliases for integrations that use the workspace directly.
+        self.slice_slider = self.viewer.slice_slider
+        self.slice_label = self.viewer.slice_position_label
+        self.summary = self.viewer.info_label
 
         splitter = QSplitter(Qt.Orientation.Horizontal, self)
-        self.image_view = OverlayImageView(splitter)
-        self.image_view.setMinimumSize(480, 420)
-        splitter.addWidget(self.image_view)
+        splitter.addWidget(self.viewer)
         legend_container = QWidget(splitter)
         legend_layout = QVBoxLayout(legend_container)
         legend_layout.setContentsMargins(6, 0, 0, 0)
@@ -88,7 +84,9 @@ class LesionExtractionWorkspace(QWidget):
         self.legend.setMinimumWidth(220)
         legend_layout.addWidget(self.legend, 1)
         help_label = QLabel(
-            "Select a component to jump to its center. Click an overlay to select it.",
+            "Select a component to jump to its center. Click an overlay to select it. "
+            "Use the mouse wheel for slices, Ctrl+wheel to zoom, middle drag to pan, "
+            "and right drag to adjust window/level.",
             legend_container,
         )
         help_label.setWordWrap(True)
@@ -97,25 +95,12 @@ class LesionExtractionWorkspace(QWidget):
         splitter.setStretchFactor(0, 1)
         root.addWidget(splitter, 1)
 
-        row = QHBoxLayout()
-        self.slice_label = QLabel("Slice: --", self)
-        row.addWidget(self.slice_label)
-        self.slice_slider = QSlider(Qt.Orientation.Horizontal, self)
-        self.slice_slider.setRange(0, 0)
-        row.addWidget(self.slice_slider, 1)
-        self.summary = QLabel("No inputs loaded", self)
-        row.addWidget(self.summary)
-        root.addLayout(row)
-
     def _connect(self) -> None:
         self.series_combo.currentIndexChanged.connect(self.series_changed)
-        self.slice_slider.valueChanged.connect(self._render)
+        self.viewer.slice_changed.connect(self._render)
+        self.viewer.window_level_changed.connect(self._render)
         self.show_overlay.toggled.connect(self._render)
         self.opacity.valueChanged.connect(self._render)
-        self.center.valueChanged.connect(self._render)
-        self.width.valueChanged.connect(self._render)
-        self.fit_button.clicked.connect(self.image_view.reset_view)
-        self.image_view.slice_delta_requested.connect(self._move_slice)
         self.image_view.label_clicked.connect(self._select_label)
         self.legend.itemSelectionChanged.connect(self._legend_changed)
 
@@ -143,29 +128,28 @@ class LesionExtractionWorkspace(QWidget):
         slices = preview.volume_hu_zyx.shape[0]
         visible = np.flatnonzero(np.any(preview.overlay_labels_zyx > 0, axis=(1, 2)))
         initial = int(visible[len(visible) // 2]) if visible.size else slices // 2
-        with QSignalBlocker(self.slice_slider):
-            self.slice_slider.setRange(0, max(0, slices - 1))
-            self.slice_slider.setValue(initial)
-        with QSignalBlocker(self.center):
-            self.center.setValue(preview.window_center)
-        with QSignalBlocker(self.width):
-            self.width.setValue(max(1.0, preview.window_width))
-        self.summary.setText(
+        self.viewer.clear_image()
+        self.viewer.set_slice_count(slices, initial_index=initial, emit=False)
+        self.viewer.set_window(
+            preview.window_width,
+            preview.window_center,
+            emit=False,
+            remember_for_reset=True,
+        )
+        self.viewer.set_info_text(
             f"{preview.volume_hu_zyx.shape[2]} x "
             f"{preview.volume_hu_zyx.shape[1]} x {slices}"
         )
-        self.image_view.clear_image()
         self._render()
 
     def clear_preview(self, message: str = "No inputs loaded") -> None:
         self._preview = None
         self._entry_by_label.clear()
         self._entry_by_entity.clear()
-        self.image_view.clear_image()
+        self.viewer.clear_image()
+        self.viewer.set_slice_count(0)
+        self.viewer.set_info_text(message)
         self.legend.clear()
-        self.slice_slider.setRange(0, 0)
-        self.slice_label.setText("Slice: --")
-        self.summary.setText(message)
         self.series_combo.setEnabled(False)
 
     def set_muted_entities(self, entity_ids: set[str]) -> None:
@@ -191,7 +175,7 @@ class LesionExtractionWorkspace(QWidget):
             return
         self._selected_entity = entity_id
         if entry.center_index_xyz is not None:
-            self.slice_slider.setValue(entry.center_index_xyz[2])
+            self.viewer.set_slice(entry.center_index_xyz[2])
         self._select_legend(entity_id)
         self._render()
         if emit:
@@ -241,18 +225,17 @@ class LesionExtractionWorkspace(QWidget):
             self.select_entity(entry.entity_id)
             self.entity_selected.emit(entry.entity_id)
 
-    def _move_slice(self, delta: int) -> None:
-        self.slice_slider.setValue(self.slice_slider.value() + delta)
-
     def _render(self, *_args) -> None:
         preview = self._preview
         if preview is None:
             return
-        index = self.slice_slider.value()
-        source = preview.volume_hu_zyx[index].astype(np.float32)
-        width = max(1.0, self.width.value())
-        lower = self.center.value() - width / 2.0
-        gray = np.clip((source - lower) * (255.0 / width), 0, 255).astype(np.uint8)
+        index = self.viewer.current_slice
+        source = preview.volume_hu_zyx[index]
+        gray = window_hu_to_uint8(
+            source,
+            self.viewer.window_width,
+            self.viewer.window_level,
+        )
         rgb = np.repeat(gray[..., None], 3, axis=2).astype(np.float32)
         labels = preview.overlay_labels_zyx[index]
         if self.show_overlay.isChecked() and self.opacity.value() > 0:
@@ -270,6 +253,3 @@ class LesionExtractionWorkspace(QWidget):
             alpha_image = alphas[clipped][..., None]
             rgb = rgb * (1.0 - alpha_image) + colors[clipped] * alpha_image
         self.image_view.set_rgb_array(np.clip(rgb, 0, 255).astype(np.uint8), labels)
-        self.slice_label.setText(
-            f"Slice: {index + 1} / {preview.volume_hu_zyx.shape[0]}"
-        )

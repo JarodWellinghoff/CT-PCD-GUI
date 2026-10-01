@@ -24,6 +24,10 @@ ruff check .
 pyright
 ```
 
+See [Reusable reconstructed-DICOM viewer](docs/dicom_viewer.md) for the shared
+slice controls, mouse interactions, signals, and extension points used by GUI
+modules that preview reconstructed DICOM images.
+
 See [Lesion extraction module](docs/lesion_extraction.md) for the NRRD-to-NPZ
 workflow, connected-component review, multi-series behavior, file schema, and
 CLI usage.
