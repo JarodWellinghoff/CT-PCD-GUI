@@ -108,6 +108,155 @@ def _warning_for_spacing(coordinates: np.ndarray) -> tuple[str, ...]:
     return tuple(warnings)
 
 
+_SURROGATE_SERIES_PREFIX = "missing-series-uid:"
+_METADATA_GROUPING_METHOD = "metadata_fingerprint_v1"
+_RECONSTRUCTION_DISCOVERY_TAGS = (
+    "SeriesInstanceUID",
+    "StudyInstanceUID",
+    "FrameOfReferenceUID",
+    "SeriesDescription",
+    "SeriesNumber",
+    "AcquisitionNumber",
+    "TemporalPositionIdentifier",
+    "ImageType",
+    "ConvolutionKernel",
+    "PatientPosition",
+    "Modality",
+    "SOPClassUID",
+    "Rows",
+    "Columns",
+    "SOPInstanceUID",
+    "NumberOfFrames",
+    "ImagePositionPatient",
+    "ImageOrientationPatient",
+    "PixelSpacing",
+)
+
+
+def _input_root(source: str | Path) -> Path:
+    resolved = Path(source).expanduser().resolve()
+    return resolved.parent if resolved.is_file() else resolved
+
+
+def _fingerprint_vector(value: Any) -> str:
+    try:
+        vector = np.asarray(value, dtype=float).reshape(-1)
+    except (TypeError, ValueError):
+        return str(value).strip()
+    if not np.all(np.isfinite(vector)):
+        return str(value).strip()
+    return ",".join(f"{float(item):.8g}" for item in vector)
+
+
+def _relative_parent(path: Path, root: Path) -> str:
+    parent = path.expanduser().resolve().parent
+    try:
+        return parent.relative_to(root).as_posix() or "."
+    except ValueError:
+        return parent.as_posix()
+
+
+def _fallback_series_key(dataset: Any, path: Path, root: Path) -> str:
+    "Build a stable application key without fabricating a DICOM UID."
+
+    components = (
+        _text(dataset, "StudyInstanceUID"),
+        _text(dataset, "FrameOfReferenceUID"),
+        _text(dataset, "Modality"),
+        _text(dataset, "SOPClassUID"),
+        _text(dataset, "SeriesNumber"),
+        _text(dataset, "AcquisitionNumber"),
+        _text(dataset, "TemporalPositionIdentifier"),
+        _text(dataset, "ImageType"),
+        _text(dataset, "ConvolutionKernel"),
+        _text(dataset, "PatientPosition").upper(),
+        str(getattr(dataset, "Rows", "")),
+        str(getattr(dataset, "Columns", "")),
+        _fingerprint_vector(getattr(dataset, "PixelSpacing", ())),
+        _fingerprint_vector(
+            getattr(dataset, "ImageOrientationPatient", ())
+        ),
+        _relative_parent(path, root),
+    )
+    digest = hashlib.sha256(
+        "\x1f".join(components).encode(
+            "utf-8", errors="replace"
+        )
+    ).hexdigest()[:20]
+    return f"{_SURROGATE_SERIES_PREFIX}{digest}"
+
+
+def _series_grouping_method(selection_key: str) -> str:
+    if selection_key.startswith(_SURROGATE_SERIES_PREFIX):
+        return _METADATA_GROUPING_METHOD
+    return "series_instance_uid"
+
+
+def _is_reconstruction_header(dataset: Any) -> bool:
+    return (
+        hasattr(dataset, "Rows")
+        and hasattr(dataset, "Columns")
+        and hasattr(dataset, "ImagePositionPatient")
+        and hasattr(dataset, "ImageOrientationPatient")
+        and hasattr(dataset, "PixelSpacing")
+    )
+
+
+def _group_reconstruction_headers(
+    source: str | Path,
+    cancel_event: Event | None,
+) -> tuple[
+    dict[str, list[tuple[Path, Any]]],
+    dict[str, int],
+    int,
+]:
+    pydicom = _pydicom()
+    root = _input_root(source)
+    groups: dict[str, list[tuple[Path, Any]]] = defaultdict(list)
+    real_keys_by_fallback: dict[str, set[str]] = defaultdict(set)
+    errors = 0
+
+    for path in _candidate_paths(source):
+        if cancel_event and cancel_event.is_set():
+            break
+        try:
+            dataset = pydicom.dcmread(
+                path,
+                stop_before_pixels=True,
+                specific_tags=list(_RECONSTRUCTION_DISCOVERY_TAGS),
+            )
+        except Exception:
+            errors += 1
+            continue
+        if not _is_reconstruction_header(dataset):
+            continue
+        source_uid = _text(dataset, "SeriesInstanceUID")
+        fallback_key = _fallback_series_key(dataset, path, root)
+        selection_key = source_uid or fallback_key
+        groups[selection_key].append((path, dataset))
+        if source_uid:
+            real_keys_by_fallback[fallback_key].add(source_uid)
+
+    attached_missing_counts: dict[str, int] = defaultdict(int)
+    surrogate_keys = [
+        key
+        for key in groups
+        if key.startswith(_SURROGATE_SERIES_PREFIX)
+    ]
+    for surrogate_key in surrogate_keys:
+        compatible = real_keys_by_fallback.get(surrogate_key, set())
+        if len(compatible) != 1:
+            continue
+        target_key = next(iter(compatible))
+        missing_records = groups.pop(surrogate_key)
+        groups[target_key].extend(missing_records)
+        attached_missing_counts[target_key] += len(missing_records)
+
+    for records in groups.values():
+        records.sort(key=lambda item: str(item[0]))
+    return dict(groups), dict(attached_missing_counts), errors
+
+
 class PydicomLesionDicomService:
     """Discover, validate, load, and associate reconstruction and CTPD data."""
 
@@ -116,125 +265,147 @@ class PydicomLesionDicomService:
         source: str | Path,
         cancel_event: Event | None = None,
     ) -> list[DicomSeriesCandidate]:
-        pydicom = _pydicom()
-        groups: dict[str, list[tuple[Path, Any]]] = defaultdict(list)
-        errors = 0
-        specific_tags = [
-            "SeriesInstanceUID",
-            "StudyInstanceUID",
-            "FrameOfReferenceUID",
-            "SeriesDescription",
-            "Modality",
-            "Rows",
-            "Columns",
-            "SOPInstanceUID",
-            "NumberOfFrames",
-            "ImagePositionPatient",
-            "ImageOrientationPatient",
-            "PixelSpacing",
-        ]
-        for path in _candidate_paths(source):
-            if cancel_event and cancel_event.is_set():
-                break
-            try:
-                dataset = pydicom.dcmread(
-                    path,
-                    stop_before_pixels=True,
-                    specific_tags=specific_tags,
-                )
-            except Exception:
-                errors += 1
-                continue
-            uid = _text(dataset, "SeriesInstanceUID")
-            if not uid or not hasattr(dataset, "Rows") or not hasattr(dataset, "Columns"):
-                continue
-            if not (
-                hasattr(dataset, "ImagePositionPatient")
-                and hasattr(dataset, "ImageOrientationPatient")
-                and hasattr(dataset, "PixelSpacing")
-            ):
-                continue
-            groups[uid].append((path, dataset))
-
+        groups, attached_missing_counts, errors = (
+            _group_reconstruction_headers(source, cancel_event)
+        )
         candidates: list[DicomSeriesCandidate] = []
-        for uid, records in groups.items():
+        for selection_key, records in groups.items():
             first = records[0][1]
+            source_uid = (
+                ""
+                if selection_key.startswith(_SURROGATE_SERIES_PREFIX)
+                else selection_key
+            )
             rows = int(first.Rows)
             columns = int(first.Columns)
             warnings: list[str] = []
-            sop_uids = [_text(item, "SOPInstanceUID") for _, item in records]
+            missing_uid_count = sum(
+                not bool(_text(item, "SeriesInstanceUID"))
+                for _, item in records
+            )
+            if selection_key.startswith(_SURROGATE_SERIES_PREFIX):
+                warnings.append(
+                    "SeriesInstanceUID (0020,000E) is missing. This "
+                    "input was grouped using directory and "
+                    "non-identifying image metadata; source files "
+                    "will not be modified."
+                )
+            elif attached_missing_counts.get(selection_key, 0):
+                count = attached_missing_counts[selection_key]
+                warnings.append(
+                    f"{count} image(s) without SeriesInstanceUID were "
+                    "attached to this UID-bearing series because "
+                    "exactly one metadata-compatible series was found."
+                )
+            sop_uids = [
+                _text(item, "SOPInstanceUID") for _, item in records
+            ]
             populated = [value for value in sop_uids if value]
             if len(populated) != len(set(populated)):
                 warnings.append("Duplicate SOP Instance UIDs were found.")
-            if any(int(getattr(item, "NumberOfFrames", 1) or 1) > 1 for _, item in records):
+            if any(
+                int(getattr(item, "NumberOfFrames", 1) or 1) > 1
+                for _, item in records
+            ):
                 warnings.append(
-                    "Enhanced/multi-frame reconstructed images are not currently supported."
+                    "Enhanced/multi-frame reconstructed images are not "
+                    "currently supported."
                 )
             if any(
-                int(item.Rows) != rows or int(item.Columns) != columns for _, item in records
+                int(item.Rows) != rows
+                or int(item.Columns) != columns
+                for _, item in records
             ):
-                warnings.append("Image matrix dimensions vary within the series.")
+                warnings.append(
+                    "Image matrix dimensions vary within the series."
+                )
             candidates.append(
                 DicomSeriesCandidate(
-                    series_instance_uid=uid,
-                    study_instance_uid=_text(first, "StudyInstanceUID"),
-                    frame_of_reference_uid=_text(first, "FrameOfReferenceUID"),
+                    series_instance_uid=source_uid,
+                    study_instance_uid=_text(
+                        first, "StudyInstanceUID"
+                    ),
+                    frame_of_reference_uid=_text(
+                        first, "FrameOfReferenceUID"
+                    ),
                     description=_text(first, "SeriesDescription"),
                     modality=_text(first, "Modality"),
                     instance_count=len(records),
                     rows=rows,
                     columns=columns,
-                    source_root=str(Path(source).expanduser().resolve()),
+                    source_root=str(
+                        Path(source).expanduser().resolve()
+                    ),
                     warnings=tuple(warnings),
+                    selection_key=selection_key,
+                    uses_surrogate_key=selection_key.startswith(
+                        _SURROGATE_SERIES_PREFIX
+                    ),
+                    source_paths=tuple(
+                        str(path.expanduser().resolve())
+                        for path, _item in records
+                    ),
+                    missing_uid_instance_count=missing_uid_count,
                 )
             )
         candidates.sort(
             key=lambda item: (
                 item.modality != "CT",
                 item.description.casefold(),
-                item.series_instance_uid,
+                item.effective_selection_key,
             )
         )
         if not candidates:
-            detail = f" ({errors} unreadable files skipped)" if errors else ""
-            raise ValidationError(f"No reconstructed DICOM image series were found{detail}.")
+            detail = (
+                f" ({errors} unreadable files skipped)"
+                if errors
+                else ""
+            )
+            raise ValidationError(
+                f"No reconstructed DICOM image series were found"
+                f"{detail}."
+            )
         return candidates
 
     def _records_for_series(
         self,
         source: str | Path,
-        series_uid: str,
+        series_key: str,
         cancel_event: Event | None,
     ) -> list[tuple[Path, Any]]:
         pydicom = _pydicom()
+        groups, _attached, _errors = (
+            _group_reconstruction_headers(source, cancel_event)
+        )
+        header_records = groups.get(series_key, [])
         records: list[tuple[Path, Any]] = []
-        for path in _candidate_paths(source):
+        for path, _header in header_records:
             if cancel_event and cancel_event.is_set():
                 break
             try:
                 dataset = pydicom.dcmread(path)
             except Exception:
                 continue
-            if _text(dataset, "SeriesInstanceUID") != series_uid:
-                continue
-            if not hasattr(dataset, "Rows") or not hasattr(dataset, "Columns"):
-                continue
             if int(getattr(dataset, "NumberOfFrames", 1) or 1) != 1:
                 raise ValidationError(
-                    "Multi-frame reconstructed DICOM is not supported by this module."
+                    "Multi-frame reconstructed DICOM is not supported "
+                    "by this module."
                 )
             records.append((path, dataset))
         if not records:
-            raise ValidationError(f"Series {series_uid} was not found in the selected input.")
+            raise ValidationError(
+                f"Series selection {series_key!r} was not found in "
+                "the selected input."
+            )
         return records
 
     def load_reconstruction(
         self,
         source: str | Path,
-        series_uid: str,
+        series_key: str,
         cancel_event: Event | None = None,
     ) -> DicomVolume:
-        records = self._records_for_series(source, series_uid, cancel_event)
+        records = self._records_for_series(source, series_key, cancel_event)
         first = records[0][1]
         column_axis, row_axis, normal = _orientation(first)
         records.sort(
@@ -256,6 +427,34 @@ class PydicomLesionDicomService:
         planes: list[np.ndarray] = []
         paths: list[str] = []
         warnings: list[str] = []
+        source_series_uids = {
+            value
+            for _path, dataset in records
+            if (value := _text(dataset, "SeriesInstanceUID"))
+        }
+        if len(source_series_uids) > 1:
+            raise ValidationError(
+                "The selected reconstruction group contains conflicting "
+                "SeriesInstanceUID values."
+            )
+        source_series_uid = next(iter(source_series_uids), "")
+        missing_series_uid_count = sum(
+            not bool(_text(dataset, "SeriesInstanceUID"))
+            for _path, dataset in records
+        )
+        if missing_series_uid_count:
+            if source_series_uid:
+                warnings.append(
+                    f"{missing_series_uid_count} image(s) are missing "
+                    "SeriesInstanceUID and were attached to the uniquely "
+                    "compatible UID-bearing series."
+                )
+            else:
+                warnings.append(
+                    "SeriesInstanceUID (0020,000E) is missing. The "
+                    "reconstruction was selected using a deterministic "
+                    "metadata fingerprint; source files were not modified."
+                )
 
         for path, dataset in records:
             if cancel_event and cancel_event.is_set():
@@ -356,7 +555,7 @@ class PydicomLesionDicomService:
             )
         )
         geometry = SeriesGeometry(
-            series_instance_uid=series_uid,
+            series_instance_uid=source_series_uid,
             study_instance_uid=_text(first, "StudyInstanceUID"),
             frame_of_reference_uid=_text(first, "FrameOfReferenceUID"),
             rows=rows,
@@ -372,6 +571,11 @@ class PydicomLesionDicomService:
             data_collection_center_lps_mm=data_center,
             warnings=tuple(dict.fromkeys(warnings)),
             patient_identity_digest=_patient_digest(first),
+            series_selection_key=series_key,
+            series_grouping_method=_series_grouping_method(series_key),
+            series_missing_uid_instance_count=(
+                missing_series_uid_count
+            ),
         )
         volume = DicomVolume(
             geometry=geometry,
@@ -390,6 +594,18 @@ class PydicomLesionDicomService:
 
         pydicom = _pydicom()
         records = discover_projection_records(source)
+        missing_series_uid_count = sum(
+            not str(record.series_instance_uid).strip()
+            for record in records
+        )
+        if missing_series_uid_count:
+            raise ValidationError(
+                "The DICOM-CT-PD input is missing SeriesInstanceUID "
+                f"(0020,000E) in {missing_series_uid_count} projection "
+                "file(s). Final processing would preserve non-conformant "
+                "output metadata; repair the source metadata before "
+                "lesion insertion."
+            )
         study_uids: set[str] = set()
         series_uids: set[str] = set()
         frame_uids: set[str] = set()
@@ -491,15 +707,18 @@ class PydicomLesionDicomService:
                 )
             else:
                 matched_identifier = True
-        if geometry.patient_position and raw.patient_positions:
-            if geometry.patient_position not in raw.patient_positions:
-                issues.append(
-                    ValidationIssue(
-                        "error",
-                        "patient-position-mismatch",
-                        "PatientPosition differs between reconstruction and CTPD data.",
-                    )
+        if (
+            geometry.patient_position
+            and raw.patient_positions
+            and geometry.patient_position not in raw.patient_positions
+        ):
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "patient-position-mismatch",
+                    "PatientPosition differs between reconstruction and CTPD data.",
                 )
+            )
         if not matched_identifier and not any(issue.severity == "error" for issue in issues):
             issues.append(
                 ValidationIssue(

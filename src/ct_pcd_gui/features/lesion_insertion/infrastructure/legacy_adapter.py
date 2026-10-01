@@ -227,7 +227,19 @@ class LegacyLesionInsertionAdapter:
                     "reconstruction_source": str(
                         Path(session.reconstruction_source).expanduser().resolve()
                     ),
-                    "reconstruction_series_instance_uid": volume.geometry.series_instance_uid,
+                    "reconstruction_series_instance_uid": (
+                        volume.geometry.series_instance_uid or None
+                    ),
+                    "reconstruction_series_grouping": {
+                        "method": volume.geometry.series_grouping_method,
+                        "selection_key": volume.geometry.effective_series_key,
+                        "source_was_nonconformant": (
+                            volume.geometry.source_was_nonconformant
+                        ),
+                        "missing_uid_instance_count": (
+                            volume.geometry.series_missing_uid_instance_count
+                        ),
+                    },
                     "reconstruction_study_instance_uid": volume.geometry.study_instance_uid,
                     "reconstruction_frame_of_reference_uid": (
                         volume.geometry.frame_of_reference_uid

@@ -103,3 +103,29 @@ pytest tests/unit/test_lesion_insertion_*.py
 14. Verify source files are byte-for-byte unchanged and output DICOM headers are preserved except for intended Pixel Data changes.
 15. Inspect the manifest, configuration, session, transformed lesion models, and pipeline summary. Confirm staged temporary paths were relocated to final paths.
 16. When an approved reconstruction executable is available, configure the command, run it, and compare the reconstructed result with the approximate preview. Domain experts must validate spatial placement and scientific correctness using representative real data.
+
+## DICOM series without SeriesInstanceUID
+
+`SeriesInstanceUID (0020,000E)` is a required DICOM series
+attribute, but the reconstruction viewer can recover conservatively
+when it is absent. Source files remain unchanged. The application
+creates a deterministic internal selection key from the relative
+parent directory and non-identifying acquisition and image-geometry
+metadata. This key is not written into the DICOM dataset and is not
+represented as an original DICOM UID.
+
+Missing-UID instances are attached to a UID-bearing series only when
+exactly one series has the same directory and metadata fingerprint.
+Ambiguous instances remain a separate, visibly warned candidate.
+Normal matrix, orientation, spacing, duplicate-plane, and
+missing-slice validation still applies.
+
+Sessions persist the application selection key separately from the
+original `SeriesInstanceUID`. The processing manifest records the
+original UID as `null` when absent, the grouping method, selection
+key, and number of affected instances.
+
+DICOM-CT-PD input without `SeriesInstanceUID` is rejected before
+final processing. The raw-data writer preserves source metadata, so
+accepting such input would create non-conformant output unless a
+separate explicit metadata-repair workflow were implemented.

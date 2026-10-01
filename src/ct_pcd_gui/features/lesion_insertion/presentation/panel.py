@@ -446,8 +446,11 @@ class LesionInsertionPanel(QWidget):
         with QSignalBlocker(self.series_combo):
             self.series_combo.clear()
             for index, candidate in enumerate(values):
-                self.series_combo.addItem(candidate.display_name, candidate.series_instance_uid)
-                if candidate.series_instance_uid == selected_uid:
+                selection_key = candidate.effective_selection_key
+                self.series_combo.addItem(
+                    candidate.display_name, selection_key
+                )
+                if selection_key == selected_uid:
                     selected_index = index
             self.series_combo.setEnabled(bool(values))
             if values:
