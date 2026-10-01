@@ -87,3 +87,4 @@ CMakeLists.txt.user*
 __pycache__
 
 *.egg-info/
+scratch/
