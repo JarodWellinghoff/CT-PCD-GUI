@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "dicom-ctpd-noise-gui"
 version = "0.1.0"
-description = "PySide6 workbench for DICOM-CT-PD processing and lesion-model viewing"
+description = "PySide6 workbench for DICOM-CT-PD processing and lesion-model workflows"
 requires-python = ">=3.10"
 dependencies = [
     "PySide6>=6.7",
@@ -14,6 +14,7 @@ dependencies = [
     "scipy>=1.11",
     "vtk>=9.3",
     "h5py>=3.10",
+    "pynrrd>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -25,7 +26,6 @@ conversion = [
     "tqdm>=4.66",
 ]
 lesion-extraction = [
-    "pynrrd>=1.0",
     "SimpleITK>=2.3",
     "pandas>=2.1",
     "openpyxl>=3.1",
