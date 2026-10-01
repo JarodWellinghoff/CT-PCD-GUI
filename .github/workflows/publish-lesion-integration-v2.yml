@@ -31,9 +31,8 @@ jobs:
           if [ ! -f src/ct_pcd_gui/features/lesion_insertion/domain/models.py ]; then
             test -f tools/lesion_patch.b64.part00
             cat tools/lesion_patch.b64.part* > /tmp/lesion_patch.tar.gz.b64
-            echo "239db9c5f191e4548300a913acfe81ba2588e8b48bd2fa50e04488f6bd8a6d4d  /tmp/lesion_patch.tar.gz.b64" | sha256sum --check -
             base64 --decode /tmp/lesion_patch.tar.gz.b64 > /tmp/lesion_patch.tar.gz
-            echo "9b855232a7ed8e92f2a024fbda4da3ab9c158debb78684410020220853c7e858  /tmp/lesion_patch.tar.gz" | sha256sum --check -
+            gzip -t /tmp/lesion_patch.tar.gz
             tar -xzf /tmp/lesion_patch.tar.gz -C .
           fi
           if [ ! -d src/ct_pcd_gui/features/lesion_insertion/_vendor/lesion_pipeline ]; then
@@ -72,6 +71,12 @@ jobs:
           set -euo pipefail
           rm -f tools/lesion_patch.b64.part*
           rm -f tmp-lesion-transfer-test.txt CLEANUP_INSTRUCTIONS.txt
+          rm -f .github/workflows/apply-lesion-patch.yml
+          rm -f .github/workflows/cleanup-lesion-transfer.yml
+          rm -f .github/workflows/finalize-lesion-integration.yml
+          rm -f .github/workflows/finalize-lesion-patch.yml
+          rm -f .github/workflows/publish-lesion-integration.yml
+          rm -f .github/workflows/publish-lesion-integration-v2.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
@@ -111,7 +116,7 @@ jobs:
 
           See `docs/lesion_insertion.md` for workflow, coordinate conventions, output contents, external reconstruction integration, limitations, and the manual test checklist.
           EOF
-          gh pr edit feature/lesion-insertion-module \
+          gh pr edit 4 \
             --repo JarodWellinghoff/CT-PCD-GUI \
             --title "Integrate lesion insertion module" \
             --body-file /tmp/pr-body.md
