@@ -303,7 +303,7 @@ class LesionInsertionPresenter(QObject):
             self._error("Reconstruction", "Select a reconstructed DICOM file or directory.")
             return
         self._remember("last_reconstruction", path)
-        desired_uid = self.state.session.reconstruction_series_uid
+        desired_uid = self.state.session.reconstruction_series_key
 
         def operation(context: TaskContext):
             return self._execute_cancellable(
@@ -331,15 +331,16 @@ class LesionInsertionPresenter(QObject):
         )
 
     @Slot(str)
-    def load_reconstruction(self, series_uid: str) -> None:
+    def load_reconstruction(self, series_key: str) -> None:
         source = self.panel.reconstruction_path()
-        if not source or not series_uid:
+        if not source or not series_key:
             return
         self._syncing = True
         try:
             self.state.update_session(
                 reconstruction_source=source,
-                reconstruction_series_uid=series_uid,
+                reconstruction_series_uid="",
+                reconstruction_series_selection_key=series_key,
             )
         finally:
             self._syncing = False
@@ -348,7 +349,7 @@ class LesionInsertionPresenter(QObject):
             return self._execute_cancellable(
                 context,
                 lambda: self.dicom_service.load_reconstruction(
-                    source, series_uid, context.cancel_event
+                    source, series_key, context.cancel_event
                 ),
             )
 
@@ -356,6 +357,14 @@ class LesionInsertionPresenter(QObject):
             if not isinstance(result, DicomVolume):
                 return
             self.volume = result
+            self.state.update_session(
+                reconstruction_series_uid=(
+                    result.geometry.series_instance_uid
+                ),
+                reconstruction_series_selection_key=(
+                    result.geometry.effective_series_key
+                ),
+            )
             self.preview_generator.clear()
             self.panel.set_position_ranges(
                 result.geometry.columns,
@@ -364,12 +373,15 @@ class LesionInsertionPresenter(QObject):
             )
             self.workspace.set_volume(result)
             if self.raw_info is not None:
-                self.association_issues = self.dicom_service.validate_association(
-                    result, self.raw_info
+                self.association_issues = (
+                    self.dicom_service.validate_association(
+                        result, self.raw_info
+                    )
                 )
             self._set_data_status()
             self.workspace.show_ready(
-                f"Loaded {result.geometry.slice_count} physically ordered reconstruction slices."
+                f"Loaded {result.geometry.slice_count} physically "
+                "ordered reconstruction slices."
             )
             self.schedule_preview()
 
@@ -377,7 +389,9 @@ class LesionInsertionPresenter(QObject):
             "load-reconstruction",
             operation,
             success,
-            status="Loading and validating reconstructed DICOM pixels…",
+            status=(
+                "Loading and validating reconstructed DICOM pixels…"
+            ),
             error_title="Reconstruction loading failed",
         )
 
@@ -793,7 +807,7 @@ class LesionInsertionPresenter(QObject):
             mapping = self.state.session.spectrum_map
         self.state.update_session(
             reconstruction_source=self.panel.reconstruction_path(),
-            reconstruction_series_uid=self.panel.selected_series_uid(),
+            reconstruction_series_selection_key=self.panel.selected_series_uid(),
             raw_source=self.panel.raw_path(),
             lesion_library_source=self.panel.library_path(),
             output_directory=self.panel.output_path(),

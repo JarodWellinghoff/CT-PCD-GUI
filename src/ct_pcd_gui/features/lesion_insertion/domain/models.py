@@ -153,6 +153,21 @@ class SeriesGeometry:
     data_collection_center_lps_mm: Vec3 = (0.0, 0.0, 0.0)
     warnings: tuple[str, ...] = ()
     patient_identity_digest: str = field(default="", repr=False, compare=False)
+    series_selection_key: str = ""
+    series_grouping_method: str = "series_instance_uid"
+    series_missing_uid_instance_count: int = 0
+
+    @property
+    def effective_series_key(self) -> str:
+        return self.series_selection_key or self.series_instance_uid
+
+    @property
+    def source_has_series_instance_uid(self) -> bool:
+        return bool(self.series_instance_uid)
+
+    @property
+    def source_was_nonconformant(self) -> bool:
+        return self.series_missing_uid_instance_count > 0
 
     @property
     def slice_count(self) -> int:
@@ -357,11 +372,32 @@ class DicomSeriesCandidate:
     columns: int
     source_root: str
     warnings: tuple[str, ...] = ()
+    selection_key: str = ""
+    uses_surrogate_key: bool = False
+    source_paths: tuple[str, ...] = ()
+    missing_uid_instance_count: int = 0
+
+    @property
+    def effective_selection_key(self) -> str:
+        return self.selection_key or self.series_instance_uid
 
     @property
     def display_name(self) -> str:
         description = self.description.strip() or "Unnamed series"
-        return f"{description} — {self.instance_count} images ({self.rows}×{self.columns})"
+        name = (
+            f"{description} — {self.instance_count} images "
+            f"({self.rows}×{self.columns})"
+        )
+        if self.uses_surrogate_key:
+            return (
+                f"{name} [metadata-grouped: missing SeriesInstanceUID]"
+            )
+        if self.missing_uid_instance_count:
+            return (
+                f"{name} [{self.missing_uid_instance_count} image(s) "
+                "missing SeriesInstanceUID]"
+            )
+        return name
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,6 +420,7 @@ class LesionSession:
     version: int = 1
     reconstruction_source: str = ""
     reconstruction_series_uid: str = ""
+    reconstruction_series_selection_key: str = ""
     raw_source: str = ""
     lesion_library_source: str = ""
     output_directory: str = ""
@@ -394,6 +431,15 @@ class LesionSession:
     preview_mode: PreviewMode = "overlay"
     reconstruction_command: str = ""
     reconstruction_output_directory: str = ""
+
+    @property
+    def reconstruction_series_key(self) -> str:
+        "Return the application key used to reopen the selected series."
+
+        return (
+            self.reconstruction_series_selection_key
+            or self.reconstruction_series_uid
+        )
 
     @property
     def spectrum_map(self) -> dict[int, int]:
@@ -469,6 +515,12 @@ class LesionSession:
             version=int(data.get("version", 1)),
             reconstruction_source=str(data.get("reconstruction_source", "")),
             reconstruction_series_uid=str(data.get("reconstruction_series_uid", "")),
+            reconstruction_series_selection_key=str(
+                data.get(
+                    "reconstruction_series_selection_key",
+                    data.get("reconstruction_series_uid", ""),
+                )
+            ),
             raw_source=str(data.get("raw_source", "")),
             lesion_library_source=str(data.get("lesion_library_source", "")),
             output_directory=str(data.get("output_directory", "")),
