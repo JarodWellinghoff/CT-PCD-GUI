@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import numpy as np
 from PySide6.QtCore import Qt, Signal, Slot
-from PySide6.QtGui import QImage, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -10,23 +9,15 @@ from PySide6.QtWidgets import (
     QLabel,
     QPlainTextEdit,
     QProgressBar,
-    QSlider,
-    QSpinBox,
     QSplitter,
-    QToolBar,
     QVBoxLayout,
     QWidget,
 )
 
+from ct_pcd_gui.shared.qt.dicom_viewer import DicomSliceViewer
+
 from ..domain.models import DicomVolume, LesionInstance, PreviewResult
 from .slice_view import SliceMarker, SliceView
-
-WINDOW_PRESETS = {
-    "Soft tissue": (400.0, 40.0),
-    "Liver": (150.0, 70.0),
-    "Lung": (1500.0, -600.0),
-    "Bone": (2000.0, 500.0),
-}
 
 
 class LesionInsertionWorkspace(QWidget):
@@ -42,8 +33,6 @@ class LesionInsertionWorkspace(QWidget):
         self._lesions: tuple[LesionInstance, ...] = ()
         self._selected_id = ""
         self._cursor: tuple[float, float, float] | None = None
-        self._window = 400.0
-        self._level = 40.0
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -57,64 +46,39 @@ class LesionInsertionWorkspace(QWidget):
         research.setObjectName("ResearchNotice")
         layout.addWidget(research)
 
-        toolbar = QToolBar("Lesion placement", self)
-        fit_action = toolbar.addAction("Fit")
-        fit_action.setShortcut(QKeySequence("F"))
-        fit_action.triggered.connect(self._fit)
-        reset_action = toolbar.addAction("Reset view")
-        reset_action.setShortcut(QKeySequence("R"))
-        reset_action.triggered.connect(self._reset_view)
-        toolbar.addSeparator()
-        toolbar.addWidget(QLabel(" Window preset: "))
-        self.preset_combo = QComboBox()
-        self.preset_combo.addItems(WINDOW_PRESETS)
-        self.preset_combo.currentTextChanged.connect(self._apply_preset)
-        toolbar.addWidget(self.preset_combo)
-        toolbar.addSeparator()
-        self.preview_checkbox = QCheckBox("Approximate preview")
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        self.view = SliceView()
+        self.viewer = DicomSliceViewer(self, image_view=self.view)
+        self.viewer.slice_changed.connect(self._slice_selected)
+        self.view.location_selected.connect(self._location_clicked)
+
+        self.viewer.add_toolbar_separator()
+        self.preview_checkbox = QCheckBox("Approximate preview", self.viewer.toolbar)
         self.preview_checkbox.setChecked(True)
         self.preview_checkbox.setToolTip(
             "Toggle the responsive image-domain approximation. This is not the final "
             "raw-data reconstruction."
         )
         self.preview_checkbox.toggled.connect(self.preview_toggled)
-        toolbar.addWidget(self.preview_checkbox)
-        self.mode_combo = QComboBox()
+        self.viewer.add_toolbar_widget(self.preview_checkbox)
+        self.mode_combo = QComboBox(self.viewer.toolbar)
         self.mode_combo.addItem("Before", "before")
         self.mode_combo.addItem("Overlay", "overlay")
         self.mode_combo.addItem("After (approx.)", "after")
         self.mode_combo.setCurrentIndex(1)
         self.mode_combo.currentIndexChanged.connect(
-            lambda _index: self.preview_mode_changed.emit(str(self.mode_combo.currentData()))
+            lambda _index: self.preview_mode_changed.emit(
+                str(self.mode_combo.currentData())
+            )
         )
-        toolbar.addWidget(self.mode_combo)
-        layout.addWidget(toolbar)
+        self.viewer.add_toolbar_widget(self.mode_combo)
 
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        viewer_container = QWidget()
-        viewer_layout = QVBoxLayout(viewer_container)
-        viewer_layout.setContentsMargins(0, 0, 0, 0)
-        self.view = SliceView()
-        self.view.location_selected.connect(self._location_clicked)
-        self.view.slice_delta_requested.connect(self._step_slice)
-        self.view.window_level_dragged.connect(self._adjust_window_level)
-        viewer_layout.addWidget(self.view, 1)
-
-        navigation = QHBoxLayout()
-        navigation.addWidget(QLabel("Slice"))
-        self.slice_slider = QSlider(Qt.Orientation.Horizontal)
-        self.slice_slider.setRange(0, 0)
-        self.slice_slider.valueChanged.connect(self._slice_selected)
-        navigation.addWidget(self.slice_slider, 1)
-        self.slice_spin = QSpinBox()
-        self.slice_spin.setRange(0, 0)
-        self.slice_spin.valueChanged.connect(self.slice_slider.setValue)
-        self.slice_slider.valueChanged.connect(self.slice_spin.setValue)
-        navigation.addWidget(self.slice_spin)
-        self.coordinate_label = QLabel("No volume loaded")
-        navigation.addWidget(self.coordinate_label)
-        viewer_layout.addLayout(navigation)
-        splitter.addWidget(viewer_container)
+        # Compatibility aliases used by the presenter and existing integrations.
+        self.preset_combo = self.viewer.preset_combo
+        self.slice_slider = self.viewer.slice_slider
+        self.slice_spin = self.viewer.slice_spin
+        self.coordinate_label = self.viewer.info_label
+        splitter.addWidget(self.viewer)
 
         log_container = QWidget()
         log_layout = QVBoxLayout(log_container)
@@ -140,7 +104,7 @@ class LesionInsertionWorkspace(QWidget):
 
     @property
     def current_slice(self) -> int:
-        return self.slice_slider.value()
+        return self.viewer.current_slice
 
     @property
     def cursor_position(self) -> tuple[float, float, float] | None:
@@ -148,19 +112,21 @@ class LesionInsertionWorkspace(QWidget):
 
     def set_volume(self, volume: DicomVolume) -> None:
         self._volume = volume
-        maximum = volume.hu.shape[0] - 1
-        self.slice_slider.setRange(0, maximum)
-        self.slice_spin.setRange(0, maximum)
-        middle = maximum // 2
+        slice_count = volume.hu.shape[0]
+        middle = max(0, slice_count - 1) // 2
         self._cursor = (
             (volume.hu.shape[2] - 1) / 2.0,
             (volume.hu.shape[1] - 1) / 2.0,
             float(middle),
         )
-        self.slice_slider.setValue(middle)
         self._preview = None
+        self.viewer.clear_image()
+        self.viewer.set_slice_count(
+            slice_count,
+            initial_index=middle,
+            emit=False,
+        )
         self.render()
-        self.view.fit_image()
 
     def set_scene_state(
         self,
@@ -184,7 +150,8 @@ class LesionInsertionWorkspace(QWidget):
 
     def render(self) -> None:
         if self._volume is None:
-            self.view.clear_image()
+            self.viewer.clear_image()
+            self.viewer.set_info_text("No volume loaded")
             return
         z = self.current_slice
         before = np.asarray(self._volume.hu[z], dtype=np.float32)
@@ -197,8 +164,11 @@ class LesionInsertionWorkspace(QWidget):
                 display = self._preview.approximate_after_hu
             elif mode == "overlay":
                 alpha = self._preview.overlay_alpha
-                display = before * (1.0 - alpha) + self._preview.approximate_after_hu * alpha
-        image = self._to_qimage(display)
+                display = (
+                    before * (1.0 - alpha)
+                    + self._preview.approximate_after_hu * alpha
+                )
+        self.viewer.set_hu_image(display)
         markers = [
             SliceMarker(
                 instance_id=lesion.instance_id,
@@ -213,54 +183,12 @@ class LesionInsertionWorkspace(QWidget):
         cursor = None
         if self._cursor is not None and abs(self._cursor[2] - z) <= 0.51:
             cursor = (self._cursor[0], self._cursor[1])
-        self.view.set_image(image, cursor_position=cursor, markers=markers)
+        self.view.set_annotations(cursor_position=cursor, markers=markers)
         if self._cursor is not None:
-            self.coordinate_label.setText(
+            self.viewer.set_info_text(
                 f"C/R/S: {self._cursor[0]:.1f}, {self._cursor[1]:.1f}, "
                 f"{self._cursor[2]:.1f}"
             )
-
-    def _to_qimage(self, values: np.ndarray) -> QImage:
-        lower = self._level - self._window / 2.0
-        scaled = np.clip((values - lower) / max(self._window, 1.0), 0.0, 1.0)
-        pixels = np.ascontiguousarray(np.rint(scaled * 255.0).astype(np.uint8))
-        image = QImage(
-            pixels.data,
-            pixels.shape[1],
-            pixels.shape[0],
-            pixels.strides[0],
-            QImage.Format.Format_Grayscale8,
-        )
-        return image.copy()
-
-    @Slot()
-    def _fit(self) -> None:
-        self.view.fit_image()
-
-    @Slot()
-    def _reset_view(self) -> None:
-        self.view.reset_view()
-        self._apply_preset(self.preset_combo.currentText())
-
-    @Slot(str)
-    def _apply_preset(self, name: str) -> None:
-        self._window, self._level = WINDOW_PRESETS.get(name, (400.0, 40.0))
-        self.render()
-
-    @Slot(float, float)
-    def _adjust_window_level(self, window_delta: float, level_delta: float) -> None:
-        self._window = max(1.0, self._window + window_delta * 2.0)
-        self._level += level_delta * 2.0
-        self.render()
-
-    @Slot(int)
-    def _step_slice(self, delta: int) -> None:
-        self.slice_slider.setValue(
-            max(
-                self.slice_slider.minimum(),
-                min(self.slice_slider.maximum(), self.current_slice + delta),
-            )
-        )
 
     @Slot(int)
     def _slice_selected(self, value: int) -> None:

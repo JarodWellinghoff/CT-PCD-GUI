@@ -16,8 +16,11 @@ and lesion insertion workflows.
 5. Uncheck components that should be omitted and edit output names as needed.
 6. Select an output folder and export.
 
-The preview supports series switching, slice scrolling, window/level controls,
-overlay opacity, zooming with Ctrl+wheel, panning, and component selection.
+The preview uses the shared reconstructed-DICOM viewer controls: Fit/Reset,
+window presets, mouse-wheel slice navigation, Ctrl+wheel zoom, middle-button
+panning, and right-drag window/level. Segmentation visibility and opacity remain
+available beside the shared controls, and overlays can still be clicked to select
+components.
 
 ## Multiple series
 
