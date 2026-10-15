@@ -15,6 +15,7 @@ class InsertionSpec:
     center_pixel: list[float] | None = None
     center_ctpd_mm: list[float] | None = None
     label: str = ""
+    spectrum_channel_map: dict[int, int] | None = None
 
     def validate(self) -> None:
         if not Path(self.lesion_model).is_file():
@@ -29,6 +30,18 @@ class InsertionSpec:
             raise ValueError("An insertion center must contain exactly three values.")
         if not self.background_hu:
             raise ValueError("background_hu must contain at least one value.")
+        if self.spectrum_channel_map is not None:
+            mapping = self.spectrum_channel_map
+            if not mapping:
+                raise ValueError("Choose at least one target threshold for each insertion.")
+            if any(
+                type(target) is not int or target < 1
+                or type(channel) is not int or channel < 0
+                for target, channel in mapping.items()
+            ):
+                raise ValueError("Target IDs must be positive integers; source channels must be nonnegative integers.")
+            if len(set(mapping.values())) != 1:
+                raise ValueError("Each insertion must use exactly one lesion source threshold.")
 
 
 @dataclass
@@ -69,7 +82,16 @@ class InsertionConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "InsertionConfig":
-        insertions = [InsertionSpec(**item) for item in data.get("insertions", [])]
+        insertions = []
+        for raw_item in data.get("insertions", []):
+            item = dict(raw_item)
+            if item.get("spectrum_channel_map") is not None:
+                raw_mapping = item["spectrum_channel_map"]
+                mapping = {int(key): value for key, value in raw_mapping.items()}
+                if len(mapping) != len(raw_mapping):
+                    raise ValueError("Duplicate target threshold IDs in insertion mapping.")
+                item["spectrum_channel_map"] = mapping
+            insertions.append(InsertionSpec(**item))
         spectrum_map = {
             int(key): int(value)
             for key, value in data.get("spectrum_channel_map", {}).items()

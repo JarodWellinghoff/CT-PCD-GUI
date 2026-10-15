@@ -4,6 +4,7 @@ from pathlib import Path
 
 from ..domain.models import DicomVolume, LesionSession, RawDatasetInfo, ValidationIssue
 from ..infrastructure.output_paths import validate_output_location
+from ..domain.thresholds import threshold_mapping
 
 
 def validate_session(
@@ -48,39 +49,16 @@ def validate_session(
             issues.append(ValidationIssue("error", "unsupported-spatial-geometry", str(exc)))
 
     if raw_info is not None:
-        spectra = set(raw_info.spectrum_indices)
-        mapping = session.spectrum_map
-        missing = sorted(spectra - set(mapping))
-        if missing:
-            issues.append(
-                ValidationIssue(
-                    "error",
-                    "spectrum-map-incomplete",
-                    f"Map CTPD spectrum indices {missing} to lesion-model channels.",
-                )
-            )
-        if mapping and any(spectrum < 1 or channel < 0 for spectrum, channel in mapping.items()):
-            issues.append(
-                ValidationIssue(
-                    "error",
-                    "spectrum-map-invalid",
-                    "Spectrum indices are 1-based and lesion channels are 0-based.",
-                )
-            )
         for lesion in enabled:
-            invalid_channels = sorted(
-                {channel for channel in mapping.values() if channel >= len(lesion.background_hu)}
-            )
-            if invalid_channels:
-                issues.append(
-                    ValidationIssue(
-                        "error",
-                        "lesion-channel-mismatch",
-                        f"{lesion.label}: spectrum mapping references lesion channel(s) "
-                        f"{invalid_channels}, but this model has "
-                        f"{len(lesion.background_hu)} channel(s).",
-                    )
+            try:
+                threshold_mapping(
+                    lesion.source_channel, lesion.target_spectrum_indices,
+                    len(lesion.background_hu), raw_info.spectrum_indices,
                 )
+            except ValueError as exc:
+                issues.append(ValidationIssue(
+                    "error", "lesion-threshold-selection", f"{lesion.label}: {exc}"
+                ))
 
     if session.output_directory:
         try:

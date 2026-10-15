@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
@@ -38,6 +37,9 @@ from ..domain.models import (
     LesionLibraryItem,
     LesionParameters,
 )
+
+
+from .threshold_selector import ThresholdSelector
 
 
 class DropLineEdit(QLineEdit):
@@ -245,9 +247,9 @@ class LesionInsertionPanel(QWidget):
         for button in (up, down, show, hide):
             order_row.addWidget(button)
         lesions_layout.addLayout(order_row)
-        self.lesion_table = QTableWidget(0, 7)
+        self.lesion_table = QTableWidget(0, 9)
         self.lesion_table.setHorizontalHeaderLabels(
-            ["On", "Show", "Label", "Lesion", "Column", "Row", "Slice"]
+            ["On", "Show", "Label", "Lesion", "Column", "Row", "Slice", "Source threshold", "Target thresholds"]
         )
         self.lesion_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
@@ -322,6 +324,8 @@ class LesionInsertionPanel(QWidget):
             self.opacity_spin,
         ):
             spin.valueChanged.connect(self._emit_parameters)
+        self.threshold_selector = ThresholdSelector()
+        parameter_layout.addWidget(self.threshold_selector, 8, 0, 1, 4)
         layout.addWidget(parameter_group)
 
         output_group = QGroupBox("5. Final processing")
@@ -335,14 +339,14 @@ class LesionInsertionPanel(QWidget):
             lambda _text: self.session_fields_changed.emit()
         )
         output_layout.addRow("Output", self.output_row)
-        self.spectrum_map = QLineEdit('{"1": 0, "2": 1}')
-        self.spectrum_map.setToolTip(
-            "JSON mapping from 1-based CTPD spectrum index to 0-based lesion-model channel."
+        routing_note = QLabel(
+            "Source and target thresholds are selected separately for each placed "
+            "lesion in section 4. A target receives no contribution from lesions "
+            "that do not select it. Thresholds excluded by every enabled lesion "
+            "are copied without changing their stored projection pixels."
         )
-        self.spectrum_map.textChanged.connect(
-            lambda _text: self.session_fields_changed.emit()
-        )
-        output_layout.addRow("Spectrum → channel", self.spectrum_map)
+        routing_note.setWordWrap(True)
+        output_layout.addRow(routing_note)
         self.workers_spin = QSpinBox()
         self.workers_spin.setRange(1, 64)
         self.workers_spin.setValue(1)
@@ -445,15 +449,6 @@ class LesionInsertionPanel(QWidget):
     def selected_library_item(self) -> LesionLibraryItem | None:
         item = self.library_list.currentItem()
         return item.data(Qt.ItemDataRole.UserRole) if item else None
-
-    def spectrum_mapping(self) -> dict[int, int]:
-        try:
-            value = json.loads(self.spectrum_map.text().strip() or "{}")
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Spectrum mapping is not valid JSON: {exc.msg}") from exc
-        if not isinstance(value, dict):
-            raise ValueError("Spectrum mapping must be a JSON object.")
-        return {int(key): int(channel) for key, channel in value.items()}
 
     def set_series(
         self, values: list[DicomSeriesCandidate], selected_uid: str = ""
@@ -593,6 +588,8 @@ class LesionInsertionPanel(QWidget):
                         f"{lesion.center_voxel_crs[0]:.1f}",
                         f"{lesion.center_voxel_crs[1]:.1f}",
                         f"{lesion.center_voxel_crs[2]:.1f}",
+                        str(lesion.source_channel + 1) if lesion.source_channel is not None else "Choose",
+                        ", ".join(map(str, lesion.target_spectrum_indices)) or "Choose",
                     ),
                     start=2,
                 ):
@@ -608,6 +605,7 @@ class LesionInsertionPanel(QWidget):
             self._updating = False
 
     def set_selected_lesion(self, lesion: LesionInstance | None) -> None:
+        self.threshold_selector.set_lesion(lesion)
         controls = [
             self.column_spin,
             self.row_spin,

@@ -20,6 +20,7 @@ from ..domain.models import (
     ValidationError,
 )
 from .model_transform import transform_model
+from ..domain.thresholds import threshold_mapping, threshold_summary
 from .output_paths import validate_output_location
 from .reconstruction import ExternalReconstructionRunner, ReconstructionCancelled
 
@@ -143,6 +144,14 @@ class LegacyLesionInsertionAdapter:
                 if cancel_event.is_set():
                     raise InsertionCancelled("Lesion insertion was cancelled.")
                 source_model = load_lesion_model(lesion.lesion_path)
+                mapping = threshold_mapping(
+                    lesion.source_channel, lesion.target_spectrum_indices,
+                    source_model.channel_count, raw_info.spectrum_indices,
+                )
+                log(f"{lesion.label}: " + threshold_summary(
+                    lesion.source_channel, lesion.target_spectrum_indices,
+                    raw_info.spectrum_indices,
+                ))
                 transformed = transform_model(source_model, lesion.parameters)
                 model_name = f"{index:03d}_{lesion.instance_id}.npz"
                 model_path = save_lesion_model_npz(
@@ -154,12 +163,17 @@ class LegacyLesionInsertionAdapter:
                         background_hu=[float(value) for value in lesion.background_hu],
                         center_ctpd_mm=[float(value) for value in lesion.center_ctpd_mm],
                         label=lesion.label,
+                        spectrum_channel_map=mapping,
                     )
                 )
                 transformed_records.append(
                     {
                         "instance_id": lesion.instance_id,
                         "lesion_id": lesion.lesion_id,
+                        "source_channel": lesion.source_channel,
+                        "source_threshold_display_number": lesion.source_channel + 1,
+                        "target_spectrum_indices": list(lesion.target_spectrum_indices),
+                        "spectrum_channel_map": {str(key): value for key, value in mapping.items()},
                         "source_model": str(Path(lesion.lesion_path).resolve()),
                         "transformed_model": str(Path("lesion_models_used") / model_name),
                         "enabled": lesion.enabled,
@@ -182,7 +196,7 @@ class LegacyLesionInsertionAdapter:
                 output_dir=str(modified_directory),
                 insertions=insertion_specs,
                 t1_series_dir=None,
-                spectrum_channel_map=session.spectrum_map,
+                spectrum_channel_map={},  # Each insertion has an explicit map.
                 patient_position=volume.geometry.patient_position,
                 workers=session.workers,
                 overwrite=False,
@@ -264,9 +278,8 @@ class LegacyLesionInsertionAdapter:
                         list(value) for value in volume.geometry.image_positions_lps_mm
                     ],
                 },
-                "spectrum_channel_map": {
-                    str(key): value for key, value in session.spectrum_map.items()
-                },
+                "threshold_routing": "per-lesion source and target selections",
+                "spectrum_channel_map": {},
                 "workers": session.workers,
                 "lesions": transformed_records,
                 "outputs": {

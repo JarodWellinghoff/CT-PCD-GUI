@@ -9,6 +9,8 @@ from typing import Any, Literal, cast
 
 import numpy as np
 
+from .thresholds import migrate_threshold_fields
+
 Vec3 = tuple[float, float, float]
 Severity = Literal["error", "warning", "info"]
 PreviewMode = Literal["before", "overlay", "after"]
@@ -86,6 +88,8 @@ class LesionInstance:
     parameters: LesionParameters = field(default_factory=LesionParameters)
     enabled: bool = True
     visible: bool = True
+    source_channel: int | None = None
+    target_spectrum_indices: tuple[int, ...] = ()
 
     @classmethod
     def create(
@@ -417,7 +421,7 @@ class RawDatasetInfo:
 
 @dataclass(frozen=True, slots=True)
 class LesionSession:
-    version: int = 1
+    version: int = 2
     reconstruction_source: str = ""
     reconstruction_series_uid: str = ""
     reconstruction_series_selection_key: str = ""
@@ -454,7 +458,7 @@ class LesionSession:
         )
 
     def validate_basic(self) -> None:
-        if self.version != 1:
+        if self.version not in {1, 2}:
             raise ValidationError(f"Unsupported lesion session version: {self.version}")
         if not 1 <= self.workers <= 64:
             raise ValidationError("Projection workers must be between 1 and 64.")
@@ -475,6 +479,15 @@ class LesionSession:
             )
         for lesion in self.lesions:
             lesion.parameters.validate()
+            if lesion.source_channel is not None and (
+                type(lesion.source_channel) is not int or lesion.source_channel < 0
+            ):
+                raise ValidationError(f"{lesion.label}: invalid lesion source threshold.")
+            targets = lesion.target_spectrum_indices
+            if any(type(target) is not int or target < 1 for target in targets):
+                raise ValidationError(f"{lesion.label}: target threshold IDs must be positive integers.")
+            if len(set(targets)) != len(targets):
+                raise ValidationError(f"{lesion.label}: duplicate target threshold IDs.")
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -486,9 +499,15 @@ class LesionSession:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> LesionSession:
+        version = int(data.get("version", 1))
+        if version not in {1, 2}:
+            raise ValidationError(f"Unsupported lesion session version: {version}")
+        old_mapping = data.get("spectrum_channel_map", {})
+        old_pairs = old_mapping.items() if isinstance(old_mapping, dict) else old_mapping
+        old_mapping = {int(key): int(value) for key, value in old_pairs}
         lesions: list[LesionInstance] = []
         for raw_item in data.get("lesions", []):
-            item = dict(raw_item)
+            item = migrate_threshold_fields(raw_item, old_mapping)
             parameter_data = dict(item.pop("parameters", {}))
             parameter_data["scale_xyz"] = tuple(
                 parameter_data.get("scale_xyz", (1.0, 1.0, 1.0))
@@ -512,7 +531,7 @@ class LesionSession:
             raise ValidationError(f"Unsupported preview mode: {preview_mode_value}")
         preview_mode = cast(PreviewMode, preview_mode_value)
         session = cls(
-            version=int(data.get("version", 1)),
+            version=2,
             reconstruction_source=str(data.get("reconstruction_source", "")),
             reconstruction_series_uid=str(data.get("reconstruction_series_uid", "")),
             reconstruction_series_selection_key=str(

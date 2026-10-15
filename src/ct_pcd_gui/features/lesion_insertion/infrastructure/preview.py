@@ -27,22 +27,26 @@ class ApproximatePreviewGenerator:
         path: str,
         parameters,
         target_spacing_rcs: tuple[float, float, float],
+        source_channel: int = 0,
     ) -> tuple[np.ndarray, np.ndarray, bool]:
         source_path = Path(path)
         modified = source_path.stat().st_mtime_ns if source_path.exists() else 0
         key = (
             *model_cache_key(path, parameters),
             modified,
+            source_channel,
             tuple(round(value, 8) for value in target_spacing_rcs),
         )
         cached = self._cache.get(key)
         if cached is not None:
             return cached[0], cached[1], True
         model = transform_model(self._model_loader(path), parameters)
-        mask = np.asarray(model.mask[..., 0], dtype=bool)
+        if not 0 <= source_channel < model.channel_count:
+            raise ValueError("The selected lesion source threshold is not in the model.")
+        mask = np.asarray(model.mask[..., source_channel], dtype=bool)
         difference = np.zeros(mask.shape, dtype=np.float32)
-        old_background = float(np.asarray(model.old_background_hu).reshape(-1)[0])
-        difference[mask] = np.asarray(model.voi_hu[..., 0], dtype=np.float32)[mask] - old_background
+        old_background = float(np.asarray(model.old_background_hu).reshape(-1)[source_channel])
+        difference[mask] = np.asarray(model.voi_hu[..., source_channel], dtype=np.float32)[mask] - old_background
         factors = (
             float(model.row_spacing_mm) / target_spacing_rcs[0],
             float(model.column_spacing_mm) / target_spacing_rcs[1],
@@ -89,10 +93,10 @@ class ApproximatePreviewGenerator:
         for lesion in session.lesions:
             if cancel_event and cancel_event.is_set():
                 raise RuntimeError("Preview generation was cancelled.")
-            if not lesion.enabled or not lesion.visible:
+            if not lesion.enabled or not lesion.visible or lesion.source_channel is None:
                 continue
             difference, mask, hit = self._resampled_difference(
-                lesion.lesion_path, lesion.parameters, spacing
+                lesion.lesion_path, lesion.parameters, spacing, lesion.source_channel
             )
             cache_hits += int(hit)
             center_column, center_row, center_slice = lesion.center_voxel_crs

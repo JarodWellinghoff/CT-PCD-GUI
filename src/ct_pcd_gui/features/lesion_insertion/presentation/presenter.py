@@ -40,6 +40,7 @@ from ..infrastructure.legacy_adapter import InsertionCancelled, LegacyLesionInse
 from ..infrastructure.lesion_library import LocalLesionModelLibrary, lesion_thumbnail
 from ..infrastructure.preview import ApproximatePreviewGenerator
 from .panel import LesionInsertionPanel
+from ..domain.thresholds import threshold_summary
 from .workspace import LesionInsertionWorkspace
 
 
@@ -138,6 +139,7 @@ class LesionInsertionPresenter(QObject):
         self.panel.show_all_requested.connect(self.show_all)
         self.panel.lesion_flags_changed.connect(self._change_flags)
         self.panel.parameters_changed.connect(self._change_parameters)
+        self.panel.threshold_selector.selection_changed.connect(self._change_thresholds)
         self.panel.position_changed.connect(self._change_position)
         self.panel.background_changed.connect(self._change_background)
         self.panel.reset_parameters_requested.connect(self.reset_parameters)
@@ -402,6 +404,8 @@ class LesionInsertionPresenter(QObject):
             return
         self._remember("last_raw", path)
         self.state.update_session(raw_source=path)
+        self.raw_info = None
+        self.panel.threshold_selector.set_available_spectra(())
 
         def operation(context: TaskContext):
             return self._execute_cancellable(
@@ -416,15 +420,8 @@ class LesionInsertionPresenter(QObject):
                 self.association_issues = self.dicom_service.validate_association(
                     self.volume, result
                 )
-            current_mapping = self.state.session.spectrum_map
-            if current_mapping and set(result.spectrum_indices).issubset(current_mapping):
-                mapping = current_mapping
-            else:
-                mapping = {
-                    spectrum: channel
-                    for channel, spectrum in enumerate(result.spectrum_indices)
-                }
-            self.state.update_session(spectrum_channel_map=tuple(sorted(mapping.items())))
+            # Loading/reloading raw data must not silently retarget a lesion.
+            self.panel.threshold_selector.set_available_spectra(result.spectrum_indices)
             self._sync_panel_fields()
             self._set_data_status()
             self.workspace.show_ready(
@@ -574,6 +571,10 @@ class LesionInsertionPresenter(QObject):
             center_ctpd_mm=tuple(float(value) for value in ctpd),
             background_hu=tuple(background for _ in range(max(1, item.channel_count))),
         )
+        lesion = replace(
+            lesion, source_channel=0 if item.channel_count == 1 else None,
+            target_spectrum_indices=(),
+        )
         self._mutate("Add lesion", lambda state: state.add(lesion))
 
     @Slot()
@@ -642,6 +643,17 @@ class LesionInsertionPresenter(QObject):
             return
         updated = replace(lesion, enabled=enabled, visible=visible)
         self._mutate("Change lesion visibility", lambda state: state.update(updated))
+
+    @Slot(object, object)
+    def _change_thresholds(self, source_channel: int | None, targets: tuple[int, ...]) -> None:
+        selected = self.state.selected
+        if selected is None:
+            return
+        updated = replace(
+            selected, source_channel=source_channel,
+            target_spectrum_indices=tuple(targets),
+        )
+        self._mutate("Change lesion thresholds", lambda state: state.update(updated))
 
     @Slot(object)
     def _change_parameters(self, value: object) -> None:
@@ -741,6 +753,9 @@ class LesionInsertionPresenter(QObject):
         self.workspace.render()
 
     def _after_state_change(self, *, schedule: bool = True) -> None:
+        self.panel.threshold_selector.set_available_spectra(
+            self.raw_info.spectrum_indices if self.raw_info is not None else ()
+        )
         self.panel.set_lesions(self.state.session.lesions, self.state.selected_id)
         self.panel.set_selected_lesion(self.state.selected)
         self.workspace.set_scene_state(
@@ -785,8 +800,8 @@ class LesionInsertionPresenter(QObject):
                 return
             self.workspace.set_preview(result)
             self.workspace.show_ready(
-                "Approximate image-domain preview ready. Final appearance requires "
-                "raw insertion and reconstruction."
+                "Source-threshold placement preview ready (not target-specific). "
+                "Final appearance requires raw insertion and reconstruction."
             )
 
         self._run_task(
@@ -801,17 +816,16 @@ class LesionInsertionPresenter(QObject):
     def _session_fields_changed(self) -> None:
         if self._syncing:
             return
-        try:
-            mapping = self.panel.spectrum_mapping()
-        except ValueError:
-            mapping = self.state.session.spectrum_map
+        if self.panel.raw_path() != self.state.session.raw_source:
+            self.raw_info = None
+            self.association_issues = []
+            self.panel.threshold_selector.set_available_spectra(())
         self.state.update_session(
             reconstruction_source=self.panel.reconstruction_path(),
             reconstruction_series_selection_key=self.panel.selected_series_uid(),
             raw_source=self.panel.raw_path(),
             lesion_library_source=self.panel.library_path(),
             output_directory=self.panel.output_path(),
-            spectrum_channel_map=tuple(sorted(mapping.items())),
             workers=self.panel.workers_spin.value(),
             reconstruction_command=self.panel.reconstruction_command.text().strip(),
             reconstruction_output_directory=self.panel.reconstruction_output_path(),
@@ -826,9 +840,6 @@ class LesionInsertionPresenter(QObject):
             self.panel.raw_row.set_path(session.raw_source)
             self.panel.library_row.set_path(session.lesion_library_source)
             self.panel.output_row.set_path(session.output_directory)
-            self.panel.spectrum_map.setText(
-                json.dumps({str(key): value for key, value in session.spectrum_channel_map})
-            )
             self.panel.workers_spin.setValue(session.workers)
             self.panel.reconstruction_command.setText(session.reconstruction_command)
             self.panel.reconstruction_output_row.set_path(
@@ -885,16 +896,28 @@ class LesionInsertionPresenter(QObject):
                 "Validation failed", self._format_issues(issues), error=True
             )
             return
-        if warnings:
-            answer = QMessageBox.warning(
-                self.panel,
-                "Review validation warnings",
-                self._format_issues(warnings) + "\n\nContinue with final raw-data insertion?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
+        routing = "\n\n".join(
+            f"{lesion.label}: " + threshold_summary(
+                lesion.source_channel, lesion.target_spectrum_indices,
+                self.raw_info.spectrum_indices,
             )
-            if answer != QMessageBox.StandardButton.Yes:
-                return
+            for lesion in self.state.session.lesions if lesion.enabled
+        )
+        review = routing + "\n\n" + (
+            "Only the listed targets receive each lesion. Thresholds excluded "
+            "by all enabled lesions keep their original stored projection pixels."
+        )
+        if warnings:
+            review += "\n\n" + self._format_issues(warnings)
+        answer = QMessageBox.question(
+            self.panel, "Confirm lesion source and target thresholds",
+            review + "\n\nContinue with final raw-data insertion?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.workspace.append_log(routing)
         session = self.state.session
         volume = self.volume
         raw = self.raw_info

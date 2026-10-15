@@ -43,6 +43,7 @@ class PreparedInsertion:
     background_hu: tuple[float, ...]
     patient_position: str
     label: str
+    spectrum_channel_map: dict[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -134,6 +135,20 @@ def _pixel_data_span(ds: Dataset) -> tuple[int, int]:
     return int(offset), int(length)
 
 
+def _active_insertions(spectrum_index: int) -> list[tuple[PreparedInsertion, int]]:
+    """Return only lesions targeting this spectrum, with each selected source."""
+    active = []
+    for insertion in _WORKER_INSERTIONS:
+        mapping = insertion.spectrum_channel_map
+        if mapping is None:
+            mapping = _WORKER_SPECTRUM_MAP
+            if spectrum_index not in mapping:
+                raise KeyError(f"No lesion channel mapping for spectrum index {spectrum_index}.")
+        if spectrum_index in mapping:
+            active.append((insertion, mapping[spectrum_index]))
+    return active
+
+
 def _process_record(record: ProjectionRecord) -> FileResult:
     if _WORKER_OUTPUT_ROOT is None:
         raise RuntimeError("Projection worker was not initialized.")
@@ -188,15 +203,14 @@ def _process_record(record: ProjectionRecord) -> FileResult:
                     "Detector dimensions or Pixel Data orientation change between "
                     f"frames in {record.relative_path}."
                 )
-            if geometry.spectrum_index not in _WORKER_SPECTRUM_MAP:
-                raise KeyError(
-                    f"No lesion channel mapping for spectrum index "
-                    f"{geometry.spectrum_index} in frame {frame_index + 1}."
-                )
-            channel = _WORKER_SPECTRUM_MAP[geometry.spectrum_index]
+            active = _active_insertions(geometry.spectrum_index)
+            if not active:
+                # The source file has already been copied. Do not decode/re-encode
+                # excluded frames: their stored bytes must remain unchanged.
+                continue
             source, detector = source_and_detector_positions(geometry)
             added = np.zeros((geometry.rows, geometry.columns), dtype=np.float64)
-            for insertion in _WORKER_INSERTIONS:
+            for insertion, channel in active:
                 volume = _volume_for(
                     insertion,
                     channel,
@@ -274,6 +288,7 @@ def _prepare_insertions(config: InsertionConfig) -> list[PreparedInsertion]:
                 background_hu=tuple(float(value) for value in insertion.background_hu),
                 patient_position=patient_position,
                 label=insertion.label or f"Lesion {index}",
+                spectrum_channel_map=insertion.spectrum_channel_map,
             )
         )
     return prepared
@@ -287,14 +302,31 @@ def _resolve_spectrum_map(
     spectra = sorted(
         {spectrum for record in records for spectrum in record.spectrum_indices}
     )
-    mapping = dict(config.spectrum_channel_map)
-    if not mapping:
+    # Legacy CLI insertions still require complete global coverage. Explicit
+    # per-lesion selections intentionally cover only the requested destinations.
+    has_legacy = any(item.spectrum_channel_map is None for item in insertions)
+    mapping = dict(config.spectrum_channel_map) if has_legacy else {}
+    if has_legacy and not mapping:
         mapping = {spectrum: channel for channel, spectrum in enumerate(spectra)}
-    missing = [spectrum for spectrum in spectra if spectrum not in mapping]
-    if missing:
-        raise ValueError(f"Missing spectrum_channel_map entries for spectra {missing}.")
-    maximum_channel = max(mapping[spectrum] for spectrum in spectra)
+    if has_legacy:
+        missing = sorted(set(spectra) - set(mapping))
+        if missing:
+            raise ValueError(f"Missing spectrum_channel_map entries for spectra {missing}.")
     for insertion in insertions:
+        selected = insertion.spectrum_channel_map
+        if selected is None:
+            selected = {spectrum: mapping[spectrum] for spectrum in spectra}
+        else:
+            unknown = sorted(set(selected) - set(spectra))
+            if unknown:
+                raise ValueError(f"{insertion.label}: target thresholds {unknown} are absent from the raw scan.")
+            if len(set(selected.values())) != 1:
+                raise ValueError(f"{insertion.label}: choose exactly one source threshold.")
+        if not selected:
+            raise ValueError(f"{insertion.label}: choose at least one target threshold.")
+        if any(type(channel) is not int or channel < 0 for channel in selected.values()):
+            raise ValueError(f"{insertion.label}: invalid source threshold.")
+        maximum_channel = max(selected.values())
         if maximum_channel >= insertion.model.channel_count:
             raise ValueError(
                 f"{insertion.label} model has {insertion.model.channel_count} channels, "
@@ -360,6 +392,7 @@ def run_insertion(
     results.sort(key=lambda item: (item.spectrum_index, item.instance_number, item.relative_path))
     summary = {
         "pipeline_version": "3.1.4",
+        "threshold_routing_version": 1,
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "input": str(Path(config.ctpd_input).resolve()),
         "output": str(output_root.resolve()),
@@ -369,6 +402,11 @@ def run_insertion(
         "lesions": [
             {
                 "label": item.label,
+                "spectrum_channel_map": {
+                    str(key): value for key, value in (
+                        item.spectrum_channel_map if item.spectrum_channel_map is not None else spectrum_map
+                    ).items()
+                },
                 "lesion_model": item.model.source_path,
                 "center_ctpd_mm": item.center_ctpd_mm.tolist(),
                 "background_hu": list(item.background_hu),
