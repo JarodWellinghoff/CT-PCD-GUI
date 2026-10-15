@@ -39,6 +39,7 @@ class LesionViewerPresenter(QObject):
         panel.reset_camera_requested.connect(workspace.scene.reset_camera)
         panel.axis_view_requested.connect(workspace.scene.set_axis_view)
         panel.screenshot_requested.connect(self.save_screenshot); panel.export_requested.connect(self.export_surface)
+        workspace.view_mode_changed.connect(self._view_mode_changed)
         self.library.batch_ready.connect(self._batch); self.library.scan_completed.connect(self._scan_done)
         self.library.file_loaded.connect(self._loaded); self.library.status.connect(workspace.set_ready)
         self.library.failed.connect(self._error); self.surface.completed.connect(self._surface_done)
@@ -70,7 +71,7 @@ class LesionViewerPresenter(QObject):
         self.settings.setValue("lesion_viewer/last_source", str(path))
         if path.is_file(): self.load_path(path)
         elif path.is_dir():
-            self.library.cancel(); self.surface.cancel(); self.panel.clear_records()
+            self.timer.stop(); self.library.cancel(); self.surface.cancel(); self.panel.clear_records()
             self.workspace.set_busy("Scanning lesion library…"); self.library.scan(path)
 
     @Slot()
@@ -82,7 +83,10 @@ class LesionViewerPresenter(QObject):
         if path.suffix.lower() not in {".mat", ".npz"}:
             self._error("Unsupported lesion file", "Only .mat and .npz files are supported."); return
         if not path.is_file(): self._error("Missing lesion file", f"File not found:\n{path}"); return
-        self.surface.cancel(); self.workspace.set_busy(f"Loading {path.name}…")
+        self.timer.stop(); self.surface.cancel()
+        self.data = None; self.candidate = None; self.last_surface = None
+        self.panel.set_controls_enabled(False); self.workspace.clear_file()
+        self.workspace.set_busy(f"Loading {path.name}…")
         self.library.load(path.resolve())
 
     def _batch(self, records: object) -> None:
@@ -94,6 +98,7 @@ class LesionViewerPresenter(QObject):
     def _loaded(self, result: object) -> None:
         if not isinstance(result, LesionFileData): return
         self.data = result; self.candidate = None; self.last_surface = None; self._reset_camera = True
+        self.workspace.set_file_data(result)
         self.panel.set_current_file(result.path); self.panel.set_controls_enabled(True); self.panel.set_candidates(result)
         self.workspace.set_ready(f"Loaded {result.path.name}."); self._update_info()
 
@@ -106,22 +111,41 @@ class LesionViewerPresenter(QObject):
         order = str(self.data.file_metadata.get("suggested_axis_order", "ZYX")).upper()
         if len(order) != 3 or set(order) != set("XYZ"): order = "ZYX"
         self.panel.configure_candidate(candidate, spacing_xyz=self.data.detected_spacing_xyz, axis_order=order)
+        self.workspace.set_candidate(candidate)
         self._update_info(); self.schedule_surface_build()
 
     @Slot()
     def schedule_surface_build(self, *_args) -> None:
-        if self.candidate is not None and not self._cleaned: self.timer.start()
+        if self.candidate is None or self._cleaned: return
+        settings = self.panel.surface_settings()
+        self.workspace.slices.set_geometry(settings.axis_order, settings.spacing_xyz)
+        self.timer.stop(); self.surface.cancel()
+        self.last_surface = None; self.workspace.clear_surface(); self._update_info()
+        if self.workspace.show_3d: self.timer.start()
+        else: self.workspace.set_ready("2-D view ready.")
+
+    @Slot(str)
+    def _view_mode_changed(self, _mode: str) -> None:
+        if not self.workspace.show_3d:
+            self.timer.stop(); self.surface.cancel()
+            if not self.library.is_running: self.workspace.set_ready("2-D view ready.")
+        elif self.candidate is not None and self.last_surface is None:
+            self.schedule_surface_build()
+
     @Slot()
     def _build_surface(self) -> None:
-        if self.candidate is None: return
+        if self.candidate is None or not self.workspace.show_3d or self._cleaned: return
         s = self.panel.surface_settings(); c = self.candidate
+        if any(size < 2 for size in c.shape):
+            self.workspace.set_ready("2-D view ready; a 3-D surface requires at least two voxels per axis.")
+            return
         request = SurfaceBuildRequest(c.array, c.min_value, c.max_value, s.axis_order, s.spacing_xyz,
                                       s.threshold, s.foreground_below, s.downsample,
                                       s.smoothing_iterations, s.reduction_percent,
                                       s.largest_component_only, s.pad_border)
         self.workspace.set_busy("Building lesion surface…"); self.surface.start(request)
     def _surface_done(self, result: object) -> None:
-        if not isinstance(result, SurfaceBuildResult): return
+        if not isinstance(result, SurfaceBuildResult) or self._cleaned or not self.workspace.show_3d: return
         self.last_surface = result; self.workspace.set_surface(result.polydata, reset_camera=self._reset_camera)
         self._reset_camera = False; self.workspace.apply_appearance(self.panel.appearance_state())
         self.workspace.set_ready(f"Rendered {result.metrics.cells:,} triangles in {result.metrics.elapsed_ms/1000:.2f} s.")
@@ -153,6 +177,8 @@ class LesionViewerPresenter(QObject):
         if self.data is None: self.workspace.set_info(""); return
         lines = [f"File: {self.data.path}", f"Candidates: {len(self.data.candidates)}"]
         if self.data.detected_spacing_xyz: lines.append(f"Spacing XYZ: {self.data.detected_spacing_xyz} mm")
+        channels = self.data.file_metadata.get("slice_channels", [])
+        lines += [f"Original HU channels: {len(channels)}", "More fields: File metadata / DICOM headers tab."]
         if self.candidate:
             lines += ["", f"Array: {self.candidate.key}", f"Shape: {self.candidate.shape}",
                       f"Type: {self.candidate.dtype_name}",

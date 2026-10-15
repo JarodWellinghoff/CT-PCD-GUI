@@ -9,8 +9,8 @@ from ct_pcd_gui.features.lesion_viewer.application.use_cases import (
     LoadLesionFile,
     ScanLesionLibrary,
 )
-from ct_pcd_gui.features.lesion_viewer.infrastructure.file_loader import (
-    MatNpzLesionFileLoader,
+from ct_pcd_gui.features.lesion_viewer.infrastructure.inspection_loader import (
+    InspectableLesionFileLoader,
 )
 from ct_pcd_gui.features.lesion_viewer.infrastructure.mesh_exporter import (
     VtkMeshExporter,
@@ -37,7 +37,7 @@ class LesionViewerModule:
             display_name="Lesion Viewer",
             panel=self.panel,
             workspace=self.workspace,
-            status_text="Browse MAT/NPZ lesions and reconstruct 3-D surfaces",
+            status_text="Inspect lesion HU slices, file metadata, and 3-D surfaces",
             owner=self.presenter,
             show_panel=True,
             is_busy=lambda: self.presenter.is_running,
@@ -57,7 +57,7 @@ def build_lesion_viewer_module(
         panel=panel,
         workspace=workspace,
         scan_library=ScanLesionLibrary(),
-        load_file=LoadLesionFile(MatNpzLesionFileLoader()),
+        load_file=LoadLesionFile(InspectableLesionFileLoader()),
         build_surface=BuildLesionSurface(VtkSurfaceBuilder()),
         exporter=VtkMeshExporter(),
         task_runner=task_runner,
