@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
+from ct_pcd_gui.cli import extract_lesions as cli
+from ct_pcd_gui.features.lesion_extraction import exporter
 from ct_pcd_gui.features.lesion_extraction.extract_case import (
     crop_volume_with_padding,
     legacy_padded_bbox,
@@ -13,9 +16,16 @@ from ct_pcd_gui.features.lesion_extraction.extract_case import (
     validate_aligned_series_geometry,
 )
 from ct_pcd_gui.features.lesion_extraction.models import (
+    LESION_TYPES,
+    LESION_TYPE_KEY,
+    CandidateSelection,
+    DicomSeriesSpec,
+    ExportSummary,
     InputValidationError,
     LesionCandidate,
     LesionNpzRecord,
+    SegmentDefinition,
+    SegmentationInfo,
     make_unique_output_names,
     sanitize_output_name,
 )
@@ -105,6 +115,7 @@ def _record(channel_count: int = 1) -> LesionNpzRecord:
     )
     return LesionNpzRecord(
         patient_name="L005-1-Lesion",
+        lesion_type="BENIGN",
         lesion_number=0,
         org_case_path="C:/case/series-1",
         org_mask="C:/case/segments.seg.nrrd",
@@ -155,14 +166,17 @@ def _candidate(candidate_id: str, output_name: str) -> LesionCandidate:
 
 
 def test_npz_field_order_matches_reference_format() -> None:
-    assert NPZ_FIELDS == REFERENCE_FIELDS
-    assert tuple(record_arrays(_record())) == REFERENCE_FIELDS
+    assert NPZ_FIELDS == REFERENCE_FIELDS + (LESION_TYPE_KEY,)
+    assert tuple(record_arrays(_record())) == NPZ_FIELDS
 
 
 def test_writer_emits_reference_dtypes_without_pickle(tmp_path: Path) -> None:
     output = write_lesion_npz(_record(), tmp_path / "lesion.npz")
     with np.load(output, allow_pickle=False) as data:
-        assert tuple(data.files) == REFERENCE_FIELDS
+        assert tuple(data.files) == NPZ_FIELDS
+        assert data[LESION_TYPE_KEY].item() == "BENIGN"
+        assert data[LESION_TYPE_KEY].shape == ()
+        assert data[LESION_TYPE_KEY].dtype.kind == "U"
         assert data["PatientName"].shape == ()
         assert data["PatientName"].dtype.kind == "U"
         assert data["LesionNumber"].dtype == np.dtype(np.int64)
@@ -177,7 +191,7 @@ def test_writer_emits_reference_dtypes_without_pickle(tmp_path: Path) -> None:
 def test_multi_series_writer_stores_all_series_as_channels(tmp_path: Path) -> None:
     output = write_lesion_npz(_record(2), tmp_path / "lesion.npz")
     with np.load(output, allow_pickle=False) as data:
-        assert tuple(data.files) == REFERENCE_FIELDS + MULTI_SERIES_NPZ_FIELDS
+        assert tuple(data.files) == NPZ_FIELDS + MULTI_SERIES_NPZ_FIELDS
         assert data["VOI"].shape == data["LesionMask"].shape == (5, 7, 3, 2)
         assert data["VOI"].dtype == np.dtype(np.int16)
         assert data["LesionMask"].dtype == np.dtype(bool)
@@ -297,3 +311,195 @@ def test_multi_series_geometry_must_be_voxel_aligned() -> None:
             reference_name="T1",
             candidate_name="T2",
         )
+
+
+@pytest.mark.parametrize("lesion_type", ("METASTATIC", "BENIGN", "PRIMARY"))
+@pytest.mark.parametrize("channel_count", (1, 2))
+def test_diagnosis_round_trips_under_exact_key(
+    tmp_path: Path, lesion_type: str, channel_count: int
+) -> None:
+    record = _record(channel_count)
+    record.lesion_type = lesion_type
+    output = write_lesion_npz(record, tmp_path / "lesion.npz")
+    with np.load(output, allow_pickle=False) as data:
+        assert data["Patient.Lesion.LesionType"].item() == lesion_type
+        assert data["Patient.Lesion.LesionType"].shape == ()
+        assert data["Patient.Lesion.LesionType"].dtype.kind == "U"
+        np.testing.assert_array_equal(data["VOI"], record.voi)
+        np.testing.assert_array_equal(data["LesionMask"], record.lesion_mask)
+
+
+@pytest.mark.parametrize("lesion_type", ("", " ", "UNKNOWN", "benign", None))
+def test_writer_rejects_missing_or_invalid_diagnosis_without_creating_output(
+    tmp_path: Path, lesion_type
+) -> None:
+    record = _record()
+    record.lesion_type = lesion_type
+    output = tmp_path / "not-created" / "lesion.npz"
+    with pytest.raises(InputValidationError, match="diagnosis"):
+        write_lesion_npz(record, output)
+    assert not output.parent.exists()
+
+
+def test_selection_has_no_implicit_diagnosis() -> None:
+    assert CandidateSelection("a", True, "Lesion").lesion_type == ""
+    assert LESION_TYPES == ("METASTATIC", "BENIGN", "PRIMARY")
+
+
+def test_omitted_lesions_do_not_require_a_diagnosis() -> None:
+    first = _candidate("a", "Lesion A")
+    second = _candidate("b", "Lesion B")
+    selected = exporter._resolve_selections(
+        (first, second),
+        (
+            CandidateSelection("a", True, "Renamed: A", "METASTATIC"),
+            CandidateSelection("b", False, "Lesion B"),
+        ),
+    )
+    assert selected == [(first, "Renamed- A", "METASTATIC")]
+
+
+@pytest.mark.parametrize("lesion_type", ("", " ", "UNKNOWN", "benign", None))
+def test_export_validates_all_diagnoses_before_image_io(
+    monkeypatch, tmp_path: Path, lesion_type
+) -> None:
+    def unexpected_io(*args, **kwargs):
+        pytest.fail("Invalid diagnoses must be rejected before image loading")
+
+    monkeypatch.setattr(exporter, "require_sitk", unexpected_io)
+    output = tmp_path / "not-created"
+    with pytest.raises(InputValidationError, match="Lesion B"):
+        exporter.export_lesions(
+            series=(DicomSeriesSpec(tmp_path, "uid", (), "Series"),),
+            segmentation=SegmentationInfo(
+                tmp_path / "unused.nrrd", (3, 3, 3), (1.0, 1.0, 1.0), (), False
+            ),
+            candidates=(_candidate("a", "Lesion A"), _candidate("b", "Lesion B")),
+            selections=(
+                CandidateSelection("a", True, "Lesion A", "PRIMARY"),
+                CandidateSelection("b", True, "Lesion B", lesion_type),
+            ),
+            output_folder=output,
+        )
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("channel_count", (1, 2))
+def test_export_preserves_each_lesion_diagnosis(monkeypatch, tmp_path: Path, channel_count):
+    """Exercise export, record construction and NPZ writing with image I/O mocked."""
+    component_labels = np.zeros((3, 3, 3), dtype=np.uint16)
+    for label, location in enumerate(((1, 1, 1), (1, 1, 2), (1, 2, 1)), start=1):
+        component_labels[location] = label
+    shape_stats = SimpleNamespace(
+        Execute=lambda mask: None,
+        GetCentroid=lambda label: (1.0, 1.0, 1.0),
+        GetEquivalentEllipsoidDiameter=lambda label: (1.0, 1.0, 1.0),
+        GetRoundness=lambda label: 1.0,
+        GetPhysicalSize=lambda label: 1.0,
+    )
+    sitk = SimpleNamespace(
+        sitkUInt8=np.uint8,
+        BinaryThreshold=lambda image, lower, upper, inside, outside: np.where(
+            (image >= lower) & (image <= upper), inside, outside
+        ),
+        Cast=lambda image, dtype: image.astype(dtype),
+        GetArrayViewFromImage=np.asarray,
+        GetArrayFromImage=np.asarray,
+        LabelShapeStatisticsImageFilter=lambda: shape_stats,
+    )
+    image = SimpleNamespace(
+        GetSpacing=lambda: (1.0, 1.0, 1.0),
+        TransformPhysicalPointToIndex=lambda point: tuple(int(value) for value in point),
+    )
+    series = tuple(
+        DicomSeriesSpec(tmp_path, f"uid-{index}", (), f"Series {index}")
+        for index in range(channel_count)
+    )
+    loaded = tuple(
+        exporter._LoadedSeries(
+            spec, image, np.full((3, 3, 3), 40 + index, dtype=np.int16), {}
+        )
+        for index, spec in enumerate(series)
+    )
+    segmentation = SegmentationInfo(
+        tmp_path / "unused.nrrd", (3, 3, 3), (1.0, 1.0, 1.0),
+        (SegmentDefinition("Segment0", "Lesion", 1),), False,
+    )
+    candidates = tuple(
+        LesionCandidate(
+            str(index), "Segment0", "Lesion", index, index, 3,
+            f"Lesion {index}", 1, 1.0, (1.0, 1.0, 1.0),
+        )
+        for index in range(1, 4)
+    )
+    selections = tuple(
+        CandidateSelection(candidate.candidate_id, True, candidate.output_name, diagnosis)
+        for candidate, diagnosis in zip(candidates, LESION_TYPES, strict=True)
+    )
+    monkeypatch.setattr(exporter, "require_sitk", lambda: sitk)
+    monkeypatch.setattr(exporter, "_read_segmentation", lambda path: (component_labels, {}))
+    monkeypatch.setattr(exporter, "parse_segment_definitions", lambda header: segmentation.segments)
+    monkeypatch.setattr(exporter, "_component_images", lambda *args: {"Segment0": component_labels})
+    monkeypatch.setattr(exporter, "_resample_labels", lambda mask, reference: mask)
+    monkeypatch.setattr(exporter, "_load_aligned_series", lambda *args, **kwargs: loaded)
+    summary = exporter.export_lesions(
+        series=series, segmentation=segmentation, candidates=candidates,
+        selections=selections, output_folder=tmp_path / "output",
+    )
+    assert len(summary.exported) == 3
+    for exported, expected in zip(summary.exported, LESION_TYPES, strict=True):
+        with np.load(exported.output_path, allow_pickle=False) as data:
+            assert data["Patient.Lesion.LesionType"].item() == expected
+            assert data["VOI"].ndim == (3 if channel_count == 1 else 4)
+
+
+def test_cli_requires_diagnosis_before_input_io(monkeypatch, capsys) -> None:
+    def unexpected_io(*args, **kwargs):
+        pytest.fail("A missing diagnosis must fail before reading inputs")
+
+    monkeypatch.setattr(cli, "inspect_segmentation", unexpected_io)
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--segmentation", "unused.nrrd"])
+    assert exc.value.code == 2
+    assert "--lesion-type is required for export" in capsys.readouterr().err
+
+
+def test_cli_rejects_unsupported_diagnosis(capsys) -> None:
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--segmentation", "unused.nrrd", "--lesion-type", "UNKNOWN"])
+    assert exc.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("flag", ("--list-labels", "--list-candidates"))
+def test_cli_listing_does_not_require_diagnosis(monkeypatch, tmp_path: Path, flag) -> None:
+    segmentation = SegmentationInfo(
+        tmp_path / "unused.nrrd", (3, 3, 3), (1.0, 1.0, 1.0),
+        (SegmentDefinition("Segment0", "Lesion", 1),), False,
+    )
+    monkeypatch.setattr(cli, "inspect_segmentation", lambda path: segmentation)
+    monkeypatch.setattr(cli, "split_segments", lambda *args, **kwargs: (_candidate("a", "A"),))
+    assert cli.main(["--segmentation", "unused.nrrd", flag]) == 0
+
+
+@pytest.mark.parametrize("lesion_type", ("METASTATIC", "BENIGN", "PRIMARY"))
+def test_cli_passes_diagnosis_to_export(monkeypatch, tmp_path: Path, lesion_type) -> None:
+    segmentation = SegmentationInfo(
+        tmp_path / "unused.nrrd", (3, 3, 3), (1.0, 1.0, 1.0),
+        (SegmentDefinition("Segment0", "Lesion", 1),), False,
+    )
+    captured = {}
+
+    def export(**kwargs):
+        captured.update(kwargs)
+        return ExportSummary((), ())
+
+    monkeypatch.setattr(cli, "inspect_segmentation", lambda path: segmentation)
+    monkeypatch.setattr(cli, "split_segments", lambda *args, **kwargs: (_candidate("a", "A"),))
+    monkeypatch.setattr(cli, "discover_dicom_series", lambda folders: ())
+    monkeypatch.setattr(cli, "export_lesions", export)
+    assert cli.main([
+        "--segmentation", "unused.nrrd", "--dicom", str(tmp_path),
+        "--output", str(tmp_path / "output"), "--lesion-type", lesion_type,
+    ]) == 0
+    assert captured["selections"][0].lesion_type == lesion_type

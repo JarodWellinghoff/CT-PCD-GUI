@@ -12,6 +12,7 @@ from ct_pcd_gui.features.lesion_extraction.extract_case import (
     split_segments,
 )
 from ct_pcd_gui.features.lesion_extraction.models import (
+    LESION_TYPES,
     CandidateSelection,
     LesionExtractionError,
     SegmentationInfo,
@@ -40,6 +41,11 @@ def build_parser() -> argparse.ArgumentParser:
         dest="segments",
         metavar="KEY_OR_NAME",
         help="Segment key, exact name, or label value. Repeat as needed.",
+    )
+    parser.add_argument(
+        "--lesion-type",
+        choices=LESION_TYPES,
+        help="Diagnosis assigned to every included lesion; required for export.",
     )
     parser.add_argument("--minimum-voxels", type=int, default=1)
     parser.add_argument(
@@ -87,6 +93,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.minimum_voxels < 1:
         parser.error("--minimum-voxels must be at least 1")
+    if not (args.list_labels or args.list_candidates) and not args.lesion_type:
+        parser.error("--lesion-type is required for export")
     try:
         segmentation = inspect_segmentation(args.segmentation)
         if args.list_labels:
@@ -126,6 +134,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     and candidate.output_name.casefold() not in omitted
                 ),
                 output_name=candidate.output_name,
+                lesion_type=args.lesion_type,
             )
             for candidate in candidates
         )

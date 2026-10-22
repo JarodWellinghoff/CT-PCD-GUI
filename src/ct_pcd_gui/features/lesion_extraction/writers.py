@@ -9,7 +9,12 @@ from typing import Any
 
 import numpy as np
 
-from .models import InputValidationError, LesionNpzRecord
+from .models import (
+    LESION_TYPE_KEY,
+    InputValidationError,
+    LesionNpzRecord,
+    validate_lesion_type,
+)
 
 
 # The first 22 members deliberately retain the exact single-series reference
@@ -37,6 +42,7 @@ NPZ_FIELDS = (
     "LesionVariance",
     "LesionVoxelCount",
     "LesionPhysicalSize",
+    LESION_TYPE_KEY,
 )
 
 # These members are appended only when a lesion file contains more than one
@@ -180,6 +186,7 @@ def _channel_statistics(
 
 
 def record_arrays(record: LesionNpzRecord) -> dict[str, np.ndarray]:
+    lesion_type = validate_lesion_type(record.lesion_type, lesion_name=record.patient_name)
     mask, voi, channel_count = _normalise_volumes(record.lesion_mask, record.voi)
 
     arrays = {
@@ -207,6 +214,7 @@ def record_arrays(record: LesionNpzRecord) -> dict[str, np.ndarray]:
         "LesionVariance": _float64(record.lesion_variance),
         "LesionVoxelCount": np.asarray(record.lesion_voxel_count, dtype=np.int64),
         "LesionPhysicalSize": _float64(record.lesion_physical_size),
+        LESION_TYPE_KEY: np.asarray(lesion_type),
     }
     for name, size in (
         ("org_slice_rng", 2),
@@ -252,8 +260,8 @@ def record_arrays(record: LesionNpzRecord) -> dict[str, np.ndarray]:
 
 def write_lesion_npz(record: LesionNpzRecord, output_path: str | Path) -> Path:
     destination = Path(output_path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
     arrays = record_arrays(record)
+    destination.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.stem}-",
         suffix=".npz",

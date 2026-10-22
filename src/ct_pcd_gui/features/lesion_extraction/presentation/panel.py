@@ -6,6 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -27,7 +28,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..models import CandidateSelection, DicomSeriesSpec, LesionCandidate, SegmentDefinition
+from ..models import (
+    LESION_TYPES,
+    CandidateSelection,
+    DicomSeriesSpec,
+    LesionCandidate,
+    SegmentDefinition,
+)
 
 
 class LesionExtractionPanel(QWidget):
@@ -134,12 +141,19 @@ class LesionExtractionPanel(QWidget):
 
         self.candidate_group = QGroupBox("3. Review lesions", content)
         candidate_layout = QVBoxLayout(self.candidate_group)
-        candidate_layout.addWidget(
-            QLabel("Uncheck lesions to omit them. Output names can be edited.")
+        candidate_help = QLabel(
+            "Choose a diagnosis for every included lesion. "
+            "Uncheck lesions to omit them. Output names can be edited.",
+            self.candidate_group,
         )
-        self.candidate_table = QTableWidget(0, 6, self.candidate_group)
+        candidate_help.setWordWrap(True)
+        candidate_layout.addWidget(candidate_help)
+        self.candidate_table = QTableWidget(0, 7, self.candidate_group)
         self.candidate_table.setHorizontalHeaderLabels(
-            ["Use", "Output name", "Segment", "Part", "Voxels", "Volume (mm3)"]
+            [
+                "Use", "Output name", "Diagnosis (required)", "Segment",
+                "Part", "Voxels", "Volume (mm3)",
+            ]
         )
         self.candidate_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
@@ -151,6 +165,9 @@ class LesionExtractionPanel(QWidget):
         self.candidate_table.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.ResizeMode.Stretch
         )
+        self.candidate_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.ResizeToContents
+        )
         candidate_layout.addWidget(self.candidate_table)
         buttons = QHBoxLayout()
         self.include_all_candidates = QPushButton("Include all", self.candidate_group)
@@ -159,6 +176,7 @@ class LesionExtractionPanel(QWidget):
         buttons.addWidget(self.include_no_candidates)
         buttons.addStretch(1)
         self.candidate_count = QLabel("0 lesions", self.candidate_group)
+        self.candidate_count.setWordWrap(True)
         buttons.addWidget(self.candidate_count)
         candidate_layout.addLayout(buttons)
         root.addWidget(self.candidate_group)
@@ -285,6 +303,7 @@ class LesionExtractionPanel(QWidget):
 
     def set_candidates(self, candidates: Sequence[LesionCandidate]) -> None:
         with QSignalBlocker(self.candidate_table):
+            self.candidate_table.setRowCount(0)
             self.candidate_table.setRowCount(len(candidates))
             for row, candidate in enumerate(candidates):
                 use = QTableWidgetItem()
@@ -297,21 +316,32 @@ class LesionExtractionPanel(QWidget):
                 use.setData(Qt.ItemDataRole.UserRole, candidate.candidate_id)
                 self.candidate_table.setItem(row, 0, use)
                 self.candidate_table.setItem(row, 1, QTableWidgetItem(candidate.output_name))
-                self.candidate_table.setItem(row, 2, QTableWidgetItem(candidate.segment_name))
+                diagnosis = QComboBox(self.candidate_table)
+                diagnosis.addItems(LESION_TYPES)
+                diagnosis.setPlaceholderText("Select diagnosis...")
+                diagnosis.setCurrentIndex(-1)
+                diagnosis.setToolTip(
+                    "Required for included lesions. Saved as Patient.Lesion.LesionType."
+                )
+                diagnosis.currentIndexChanged.connect(
+                    lambda *_: self._candidate_changed()
+                )
+                self.candidate_table.setCellWidget(row, 2, diagnosis)
+                self.candidate_table.setItem(row, 3, QTableWidgetItem(candidate.segment_name))
                 self.candidate_table.setItem(
                     row,
-                    3,
+                    4,
                     QTableWidgetItem(
                         f"{candidate.component_index}/{candidate.component_count}"
                     ),
                 )
                 self.candidate_table.setItem(
-                    row, 4, QTableWidgetItem(f"{candidate.voxel_count:,}")
+                    row, 5, QTableWidgetItem(f"{candidate.voxel_count:,}")
                 )
                 self.candidate_table.setItem(
-                    row, 5, QTableWidgetItem(f"{candidate.physical_size_mm3:,.2f}")
+                    row, 6, QTableWidgetItem(f"{candidate.physical_size_mm3:,.2f}")
                 )
-                for column in (2, 3, 4, 5):
+                for column in (3, 4, 5, 6):
                     item = self.candidate_table.item(row, column)
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         self._candidate_changed()
@@ -322,17 +352,20 @@ class LesionExtractionPanel(QWidget):
         with QSignalBlocker(self.candidate_table):
             self.candidate_table.setRowCount(0)
         self.candidate_count.setText("0 lesions")
+        self.set_export_enabled(False)
 
     def candidate_selections(self) -> tuple[CandidateSelection, ...]:
         result: list[CandidateSelection] = []
         for row in range(self.candidate_table.rowCount()):
             use = self.candidate_table.item(row, 0)
             name = self.candidate_table.item(row, 1)
+            diagnosis = self.candidate_table.cellWidget(row, 2)
             result.append(
                 CandidateSelection(
                     candidate_id=str(use.data(Qt.ItemDataRole.UserRole)),
                     included=use.checkState() == Qt.CheckState.Checked,
                     output_name=name.text().strip(),
+                    lesion_type=diagnosis.currentText(),
                 )
             )
         return tuple(result)
@@ -347,10 +380,13 @@ class LesionExtractionPanel(QWidget):
                     break
 
     def _candidate_changed(self) -> None:
-        included = sum(selection.included for selection in self.candidate_selections())
-        self.candidate_count.setText(
-            f"{self.candidate_table.rowCount()} lesion(s), {included} included"
-        )
+        included = [item for item in self.candidate_selections() if item.included]
+        missing = sum(item.lesion_type not in LESION_TYPES for item in included)
+        text = f"{self.candidate_table.rowCount()} lesion(s), {len(included)} included"
+        if missing:
+            text += f"; {missing} need a diagnosis"
+        self.candidate_count.setText(text)
+        self.set_export_enabled(bool(included))
         self.candidate_state_changed.emit()
 
     def _candidate_selected(self) -> None:
@@ -384,7 +420,14 @@ class LesionExtractionPanel(QWidget):
         self.output_group.setEnabled(not self._busy and self._stage == "prepared")
 
     def set_export_enabled(self, enabled: bool) -> None:
-        self.export_button.setEnabled(enabled and not self._busy)
+        included = [item for item in self.candidate_selections() if item.included]
+        diagnosed = bool(included) and all(
+            item.lesion_type in LESION_TYPES for item in included
+        )
+        self.export_button.setEnabled(enabled and diagnosed and not self._busy)
+        self.export_button.setToolTip(
+            "" if diagnosed else "Choose a diagnosis for every included lesion."
+        )
 
     def set_status(self, text: str, *, log: bool = False) -> None:
         self.status_label.setText(text)
