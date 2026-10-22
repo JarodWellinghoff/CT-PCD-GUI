@@ -21,6 +21,7 @@ from .models import (
     LesionNpzRecord,
     SegmentationInfo,
     sanitize_output_name,
+    validate_lesion_type,
 )
 from .preview import _resample_labels
 from .readers import (
@@ -205,6 +206,7 @@ def _record(
     mask_image: Any,
     output_name: str,
     lesion_number: int,
+    lesion_type: str,
 ) -> LesionNpzRecord:
     sitk = require_sitk()
     reference = loaded_series[0]
@@ -270,6 +272,7 @@ def _record(
     return LesionNpzRecord(
         patient_name=output_name,
         lesion_number=lesion_number,
+        lesion_type=lesion_type,
         org_case_path=reference_path,
         org_mask=str(segmentation_path),
         org_dcm_path=reference_path,
@@ -305,9 +308,9 @@ def _record(
 def _resolve_selections(
     candidates: Sequence[LesionCandidate],
     selections: Sequence[CandidateSelection],
-) -> list[tuple[LesionCandidate, str]]:
+) -> list[tuple[LesionCandidate, str, str]]:
     candidates_by_id = {candidate.candidate_id: candidate for candidate in candidates}
-    selected: list[tuple[LesionCandidate, str]] = []
+    selected: list[tuple[LesionCandidate, str, str]] = []
     used_names: set[str] = set()
     for selection in selections:
         if not selection.included:
@@ -320,8 +323,9 @@ def _resolve_selections(
         name = sanitize_output_name(selection.output_name)
         if name.casefold() in used_names:
             raise InputValidationError(f"Duplicate included output name: {name}")
+        lesion_type = validate_lesion_type(selection.lesion_type, lesion_name=name)
         used_names.add(name.casefold())
-        selected.append((candidate, name))
+        selected.append((candidate, name, lesion_type))
     if not selected:
         raise InputValidationError("Include at least one lesion before exporting.")
     return selected
@@ -390,7 +394,7 @@ def export_lesions(
     )
     by_key = {segment.key: segment for segment in definitions}
     components = _component_images(
-        segmentation_image, by_key, [candidate for candidate, _ in selected]
+        segmentation_image, by_key, [candidate for candidate, _, _ in selected]
     )
     output_root = Path(output_folder).expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
@@ -408,7 +412,7 @@ def export_lesions(
     reference_image = loaded_series[0].image
     series_names = tuple(item.spec.display_name for item in loaded_series)
 
-    for lesion_number, (candidate, output_name) in enumerate(selected):
+    for lesion_number, (candidate, output_name, lesion_type) in enumerate(selected):
         if cancelled and cancelled():
             raise InputValidationError("Lesion extraction was cancelled.")
         component = components[candidate.segment_key]
@@ -433,6 +437,7 @@ def export_lesions(
                 mask_image=mask,
                 output_name=output_name,
                 lesion_number=lesion_number,
+                lesion_type=lesion_type,
             )
             path = write_lesion_npz(record, output_root / f"{output_name}.npz")
             exported.append(

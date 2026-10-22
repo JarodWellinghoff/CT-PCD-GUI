@@ -9,6 +9,10 @@ from typing import Any
 import numpy as np
 
 
+LESION_TYPES = ("METASTATIC", "BENIGN", "PRIMARY")
+LESION_TYPE_KEY = "Patient.Lesion.LesionType"
+
+
 class LesionExtractionError(RuntimeError):
     """Base error for lesion-extraction failures that can be shown to users."""
 
@@ -19,6 +23,15 @@ class DependencyUnavailableError(LesionExtractionError):
 
 class InputValidationError(LesionExtractionError):
     """Raised when selected inputs cannot form an extraction job."""
+
+
+def validate_lesion_type(value: str, *, lesion_name: str = "Lesion") -> str:
+    """Require an explicit supported diagnosis; never infer a clinical label."""
+    if not isinstance(value, str) or value not in LESION_TYPES:
+        raise InputValidationError(
+            f"Choose a diagnosis for {lesion_name!r}: {', '.join(LESION_TYPES)}."
+        )
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +90,7 @@ class CandidateSelection:
     candidate_id: str
     included: bool
     output_name: str
+    lesion_type: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +188,7 @@ class LesionNpzRecord:
     series_source_paths: tuple[str, ...] = ()
     dicom_headers: tuple[Mapping[str, Any], ...] = ()
     reference_series_index: int = 0
+    lesion_type: str = ""
 
 
 _INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
