@@ -1,4 +1,5 @@
 """Synchronized lesion slices built on the shared DICOM viewer controls."""
+
 from __future__ import annotations
 
 import math
@@ -7,11 +8,22 @@ import numpy as np
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QImage, QMouseEvent, QPixmap, QTransform
 from PySide6.QtWidgets import (
-    QBoxLayout, QCheckBox, QGraphicsPixmapItem, QGroupBox, QHBoxLayout, QLabel,
-    QScrollArea, QVBoxLayout, QWidget,
+    QBoxLayout,
+    QCheckBox,
+    QGraphicsPixmapItem,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
 )
 
-from ct_pcd_gui.shared.qt.dicom_viewer import DicomImageView, DicomSliceViewer, array_to_qimage
+from ct_pcd_gui.shared.qt.dicom_viewer import (
+    DicomImageView,
+    DicomSliceViewer,
+    array_to_qimage,
+)
 from ..domain.inspection import SliceChannel, mask_outline, to_zyx
 
 
@@ -35,12 +47,20 @@ class HuImageView(DicomImageView):
             self.fit_image()
 
     def set_qimage(self, image: QImage) -> None:
-        super().set_qimage(image)
+        # Set physical scene bounds BEFORE fitting. The base implementation
+        # briefly installs unscaled pixel bounds, which can shift/clamp the
+        # view when spacing is not 1 mm (including during window/level updates).
+        self.pixmap_item.setPixmap(QPixmap.fromImage(image))
         self.scene().setSceneRect(self.pixmap_item.sceneBoundingRect())
+        if self._fit_next_image:
+            self.fit_image()
+            self._fit_next_image = False
 
     def fit_image(self) -> None:
         if self.has_image:
-            self.fitInView(self.pixmap_item.sceneBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
+            self.fitInView(
+                self.pixmap_item.sceneBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio
+            )
             self._auto_fit = True
 
     def set_mask(self, mask: np.ndarray | None) -> None:
@@ -57,7 +77,9 @@ class HuImageView(DicomImageView):
         self.overlay.setPixmap(QPixmap())
 
     def _pixel(self, event: QMouseEvent) -> tuple[int, int]:
-        point = self.pixmap_item.mapFromScene(self.mapToScene(event.position().toPoint()))
+        point = self.pixmap_item.mapFromScene(
+            self.mapToScene(event.position().toPoint())
+        )
         if self.has_image and self.pixmap_item.boundingRect().contains(point):
             return math.floor(point.x()), math.floor(point.y())
         return -1, -1
@@ -102,7 +124,9 @@ class LesionSliceViews(QWidget):
         row.addWidget(QLabel("2-D stored voxel values"))
         row.addStretch(1)
         self.outline = QCheckBox("Lesion outline")
-        self.outline.setToolTip("Show the stored LesionMask boundary; independent of 3-D surface processing.")
+        self.outline.setToolTip(
+            "Show the stored LesionMask boundary; independent of 3-D surface processing."
+        )
         self.outline.setChecked(True)
         self.outline.toggled.connect(self._render)
         row.addWidget(self.outline)
@@ -152,11 +176,15 @@ class LesionSliceViews(QWidget):
     def set_channels(self, channels: list[SliceChannel]) -> None:
         self.clear()
         if not channels:
-            self.notice.setText("Original HU unavailable: this file has no recognized VOI/HU array.")
+            self.notice.setText(
+                "Original HU unavailable: this file has no recognized VOI/HU array."
+            )
             return
         shape = channels[0].values.shape
         if any(channel.values.shape != shape for channel in channels):
-            self.notice.setText("Channels have different shapes; synchronized views are unavailable.")
+            self.notice.setText(
+                "Channels have different shapes; synchronized views are unavailable."
+            )
             return
         self.channels = channels
         for channel in channels:
@@ -167,18 +195,26 @@ class LesionSliceViews(QWidget):
             viewer = DicomSliceViewer(image_view=canvas)
             viewer.slice_changed.connect(self.set_slice)
             canvas.pixel_hovered.connect(self._show_probe)
-            viewer.set_info_text("Stored VOI" if channel.units == "HU" else "Stored array")
+            viewer.set_info_text(
+                "Stored VOI" if channel.units == "HU" else "Stored array"
+            )
             if channel.units != "HU":
                 step = max(1, channel.values.size // 100000)
                 sample = channel.values.flat[::step][:100000]
                 finite = sample[np.isfinite(sample)]
                 if finite.size:
                     low, high = float(finite.min()), float(finite.max())
-                    viewer.set_window(max(1.0, high - low), (low + high) / 2.0,
-                                      emit=False, remember_for_reset=True)
+                    viewer.set_window(
+                        max(1.0, high - low),
+                        (low + high) / 2.0,
+                        emit=False,
+                        remember_for_reset=True,
+                    )
             box_layout.addWidget(viewer, 1)
-            readout = QLabel("Hover over the image to inspect a stored value.")
-            readout.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            readout = QLabel(" ")
+            readout.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
             box_layout.addWidget(readout)
             self.views_layout.addWidget(box, 1)
             self._boxes.append(box)
@@ -186,7 +222,11 @@ class LesionSliceViews(QWidget):
             self.viewers.append(viewer)
         self.outline.setEnabled(any(channel.mask is not None for channel in channels))
         missing_mask = any(channel.mask is None for channel in channels)
-        note = "Image numbers are synchronized across channels. " if len(channels) > 1 else ""
+        note = (
+            "Image numbers are synchronized across channels. "
+            if len(channels) > 1
+            else ""
+        )
         note += "Displayed values are stored values; window/level only changes their appearance."
         if channels[0].units != "HU":
             note = "Original HU unavailable. Showing the selected stored array without assuming HU units."
@@ -195,15 +235,25 @@ class LesionSliceViews(QWidget):
         self.notice.setText(note)
         self.set_geometry(self._axis_order, self._spacing, reset=True)
 
-    def set_geometry(self, axis_order: str, spacing_xyz: tuple[float, float, float], *, reset: bool = False) -> None:
+    def set_geometry(
+        self,
+        axis_order: str,
+        spacing_xyz: tuple[float, float, float],
+        *,
+        reset: bool = False,
+    ) -> None:
         changed = self._axis_order != axis_order
         spacing_changed = self._spacing != spacing_xyz
         self._axis_order, self._spacing = axis_order, spacing_xyz
         if not self.channels or not (reset or changed or spacing_changed):
             return
-        self._volumes = [to_zyx(channel.values, axis_order) for channel in self.channels]
-        self._masks = [to_zyx(channel.mask, axis_order) if channel.mask is not None else None
-                       for channel in self.channels]
+        self._volumes = [
+            to_zyx(channel.values, axis_order) for channel in self.channels
+        ]
+        self._masks = [
+            to_zyx(channel.mask, axis_order) if channel.mask is not None else None
+            for channel in self.channels
+        ]
         count = self._volumes[0].shape[0]
         if reset or changed:
             self._slice = count // 2
@@ -227,16 +277,22 @@ class LesionSliceViews(QWidget):
     def _render(self, *_args) -> None:
         for viewer, volume, mask in zip(self.viewers, self._volumes, self._masks):
             viewer.set_hu_image(volume[self._slice])
-            viewer.image_view.set_mask(mask[self._slice] if self.outline.isChecked() and mask is not None else None)
+            viewer.image_view.set_mask(
+                mask[self._slice]
+                if self.outline.isChecked() and mask is not None
+                else None
+            )
         self._show_probe(*(self._probe or (-1, -1)))
 
     def _show_probe(self, x: int, y: int) -> None:
         self._probe = (x, y) if x >= 0 and y >= 0 else None
         for label, channel, volume in zip(self._readouts, self.channels, self._volumes):
             if not (0 <= y < volume.shape[1] and 0 <= x < volume.shape[2]):
-                label.setText("Hover over the image to inspect a stored value.")
+                label.setText(" ")
                 continue
             value = volume[self._slice, y, x].item()
             unit = " HU" if channel.units == "HU" else " (stored value)"
             valid = "" if np.isfinite(value) else " [non-finite]"
-            label.setText(f"Slice {self._slice + 1}, row {y + 1}, column {x + 1}: {value}{unit}{valid}")
+            label.setText(
+                f"Slice {self._slice + 1}, row {y + 1}, column {x + 1}: {value}{unit}{valid}"
+            )

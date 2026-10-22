@@ -11,8 +11,10 @@ from ..infrastructure.dicom_service import PydicomLesionDicomService
 from ..infrastructure.legacy_adapter import LegacyLesionInsertionAdapter
 from ..infrastructure.lesion_library import LocalLesionModelLibrary
 from ..infrastructure.preview import ApproximatePreviewGenerator
-from .panel import LesionInsertionPanel
-from .presenter import LesionInsertionPresenter
+from .library_preview_integration import (
+    PreviewLesionInsertionPanel as LesionInsertionPanel,
+    PreviewLesionInsertionPresenter as LesionInsertionPresenter,
+)
 from .workspace import LesionInsertionWorkspace
 
 
