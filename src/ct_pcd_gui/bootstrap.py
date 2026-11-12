@@ -9,6 +9,9 @@ os.environ.setdefault("QT_API", "pyside6")
 
 from PySide6.QtWidgets import QApplication
 
+from ct_pcd_gui.features.freect_reconstruction.presentation.module import (
+    build_freect_reconstruction_module,
+)
 from ct_pcd_gui.features.lesion_extraction.presentation.module import (
     build_lesion_extraction_module,
 )
@@ -37,6 +40,7 @@ def build_module_registry(task_runner: QtTaskRunner) -> ModuleRegistry:
     registry.register(build_lesion_extraction_module(task_runner))
     registry.register(build_lesion_insertion_module(task_runner))
     registry.register(build_noise_insertion_module(task_runner))
+    registry.register(build_freect_reconstruction_module(task_runner))
     return registry
 
 

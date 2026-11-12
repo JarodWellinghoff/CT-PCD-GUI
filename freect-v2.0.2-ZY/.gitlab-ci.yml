@@ -1,0 +1,120 @@
+image: golang:latest
+
+stages:
+  - prepare
+  - test
+  - build
+  - deploy
+  - release
+
+#format:
+#  stage: test
+#  script:
+#    - go fmt $(go list ./... | grep -v /vendor/)
+#    - go vet $(go list ./... | grep -v /vendor/)
+#    #- go test -race $(go list ./... | grep -v /vendor/)
+
+prepare_version:
+  stage: prepare
+  image: alpine/semver
+  before_script:
+    - apk update && apk add git
+  script:
+    #- export CURR_VERSION=`git tag | sort -V | tail -1`
+    - export LATEST_TAGGED_COMMIT=`git rev-list --tags --max-count=1`
+    - export CURR_VERSION=`git describe --tags $LATEST_TAGGED_COMMIT`
+    - echo $CURR_VERSION
+    - echo $RELEASE_TYPE
+    - |
+      if [ "${RELEASE_TYPE}" = "" ]; then # If RELEASE_TYPE is set, a new release will be created, no matter what. Use with caution.
+          echo Bumping as prelease
+          export BUMPED_VERSION=`semver -i prerelease ${CURR_VERSION}`
+      else
+          echo Bumping as ${RELEASE_TYPE}
+          export BUMPED_VERSION=`semver -i ${RELEASE_TYPE} ${CURR_VERSION}`
+      fi
+    - echo "Calculated version ${BUMPED_VERSION}"
+    - echo "VERSION=${BUMPED_VERSION}" > version.env
+  rules:
+    - if: '$CI_MERGE_REQUEST_TARGET_BRANCH_NAME == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  artifacts:
+    reports:
+      dotenv: version.env
+
+test_load:
+  stage: test
+  image: golang:latest
+  script:
+    - echo "Verify that we can load version numbers"
+    - echo "Version found to be ${VERSION}"
+  rules:
+    - if: '$CI_MERGE_REQUEST_TARGET_BRANCH_NAME == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+compile:
+  stage: build
+  needs:
+    - prepare_version
+  before_script:
+    - apt update && apt install zip -y
+  script:
+    #- if [ "$TELEM_URL_1" = "" ]
+    #- then
+    #-     export TELEM_URL_1="debug-build"
+    #-     export TELEM_URL_2="debug-build"
+    #- fi
+    - export FCT_VERSION=$VERSION # we want to set the version in the built exe using the pipeline (TODO)
+    - echo "FCT_VERSION IS ${FCT_VERSION}"
+    - make build/fct-wfbp    
+    - cd build
+    - zip freect-darwin-arm64.zip -r darwin-arm64/
+    - zip freect-darwin-amd64.zip -r darwin-amd64/
+    - zip freect-linux-amd64.zip -r linux-amd64/
+    - zip freect-windows-amd64.zip -r windows-amd64/    
+  artifacts:
+    expire_in: never
+    paths:
+      - build/freect-darwin-arm64.zip
+      - build/freect-darwin-amd64.zip
+      - build/freect-windows-amd64.zip
+      - build/freect-linux-amd64.zip
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $RELEASE_TYPE != null'
+
+release:
+  stage: release
+  needs:
+    - prepare_version
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  script:
+    - echo 'Calculated version $VERSION or ${VERSION}' 
+    - echo $VERSION
+  # Specifying that this job requires artifacts from the previous job to succeed
+  needs:
+    - job: compile
+      artifacts: true
+    - job: prepare_version
+      artifacts: true
+  release:
+    name: 'Release v$VERSION ($RELEASE_TYPE)'
+    description: 'Created using the release-cli'
+    # tag_name is a mendatory field and can not be an empty string
+    tag_name: "v${VERSION}"
+    assets:
+      links:
+        - name: 'freect-v${VERSION}-linux-amd64.zip'
+          url: 'https://gitlab.com/freect/freect/-/jobs/artifacts/${CI_COMMIT_SHORT_SHA}/raw/build/freect-linux-amd64.zip?job=compile'
+          
+        - name: 'freect-v${VERSION}-macos-amd64.zip (Intel CPU)'
+          url: 'https://gitlab.com/freect/freect/-/jobs/artifacts/${CI_COMMIT_SHORT_SHA}/raw/build/freect-darwin-amd64.zip?job=compile'
+          
+        - name: 'freect-v${VERSION}-macos-arm64.zip (M1 & M2 CPU)'
+          url: 'https://gitlab.com/freect/freect/-/jobs/artifacts/${CI_COMMIT_SHORT_SHA}/raw/build/freect-darwin-arm64.zip?job=compile'
+          
+        - name: 'freect-v${VERSION}-windows-amd64.zip'
+          url: 'https://gitlab.com/freect/freect/-/jobs/artifacts/${CI_COMMIT_SHORT_SHA}/raw/build/freect-windows-amd64.zip?job=compile'
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $RELEASE_TYPE != null'
+  #only:
+  #  # Can be removed if you want to trigger the pipeline for merge request or other branches
+  #  - main
+  #  - 

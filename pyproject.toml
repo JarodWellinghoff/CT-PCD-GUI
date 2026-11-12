@@ -15,6 +15,7 @@ dependencies = [
     "vtk>=9.3",
     "h5py>=3.10",
     "pynrrd>=1.0",
+    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]

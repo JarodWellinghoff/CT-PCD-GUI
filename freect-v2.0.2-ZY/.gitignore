@@ -1,0 +1,7 @@
+tmp
+*.bin
+*.png
+*.json
+*.yaml
+.DS_STORE
+
